@@ -1,0 +1,90 @@
+name: Fork Windows installer
+
+on:
+  push:
+    branches:
+      - build/windows-0.1.19-artifact-fix
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npm pkg set version=0.1.19+fork
+      - name: Verify artifact delivery
+        run: pnpm test src/main/artifacts/protocol.test.ts src/main/artifacts/remote.test.ts
+      - run: node tools/install/cua-driver.mjs
+      - run: pnpm build
+      - run: node tools/install/device-helpers.mjs
+      - run: pnpm exec electron-builder --win --x64 --publish never
+      - name: Verify replacement preserves the existing data directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $official = Join-Path $env:RUNNER_TEMP 'Kettu-official.exe'
+          $officialUrl = 'https://github.com/KettuAI/Kettu/releases/download/v0.1.19/Kettu-0.1.19-x64-setup.exe'
+          Invoke-WebRequest -Uri $officialUrl -OutFile $official -MaximumRetryCount 2
+          $officialHash = '0AE7B318592785D3B76172557E1FA3AF8DDE17A9306067BF26321FA2124DB0C3'
+          if ((Get-FileHash -LiteralPath $official).Hash -ne $officialHash) {
+            throw 'Official installer SHA-256 did not match the expected release asset.'
+          }
+
+          $installAt = Join-Path $env:RUNNER_TEMP 'kettu-upgrade-test'
+          $asar = Join-Path $installAt 'resources/app.asar'
+          function Install-Kettu([string] $exe) {
+            $proc = Start-Process -FilePath $exe -ArgumentList @('/S', '/currentuser', "/D=$installAt") -Wait -PassThru
+            if ($proc.ExitCode -ne 0 -or !(Test-Path -LiteralPath $asar)) {
+              throw "Installation failed with code $($proc.ExitCode)."
+            }
+          }
+
+          Install-Kettu $official
+          $before = (Get-FileHash -LiteralPath $asar).Hash
+          $profileDir = Join-Path $env:APPDATA 'Kettu'
+          New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+          $marker = Join-Path $profileDir 'fork-upgrade-test.txt'
+          Set-Content -LiteralPath $marker -Value 'existing data'
+
+          $setups = @(Get-ChildItem dist -Filter '*-x64-setup.exe' -File)
+          if ($setups.Count -ne 1) { throw 'Expected one Windows x64 installer.' }
+          Install-Kettu $setups[0].FullName
+          $after = (Get-FileHash -LiteralPath $asar).Hash
+          $expected = (Get-FileHash -LiteralPath 'dist/win-unpacked/resources/app.asar').Hash
+          if ($after -eq $before -or $after -ne $expected) { throw 'The fork app was not installed.' }
+          if ((Get-Content -LiteralPath $marker -Raw).Trim() -ne 'existing data') {
+            throw 'The installer did not preserve existing application data.'
+          }
+      - name: Name and hash the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem dist -Filter '*-x64-setup.exe' -File
+          $name = 'Kettu-0.1.19-fork产物修复-x64-setup.exe'
+          New-Item -ItemType Directory -Path delivery | Out-Null
+          $output = Join-Path delivery $name
+          Copy-Item -LiteralPath $installer.FullName -Destination $output
+          $sha256 = (Get-FileHash -LiteralPath $output).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath (Join-Path delivery SHA256SUMS.txt) -Value "$sha256  $name" -Encoding utf8
+          "SHA-256: $sha256" >> $env:GITHUB_STEP_SUMMARY
+          "Bytes: $((Get-Item -LiteralPath $output).Length)" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: 0.1.19-fork产物修复-Windows-x64
+          path: delivery/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30

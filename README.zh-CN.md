@@ -72,7 +72,7 @@
 - **Git**：分支、改动和 Pull Request 的检查状态。
 - **Worktree**：会话可以在自己的 Git worktree 里干活，由 Kettu 创建和清理。
 - **内置浏览器**：Agent 能打开页面、点击、输入和截图，你随时可以接手。
-- **Artifacts**：Agent 做的网页、文档、幻灯片和画布。画布上的画框可以排版、标注后交给 Agent，也可以留言、自己编辑，或导出成 Word 和 PowerPoint。
+- **Artifacts**：Agent 做的网页、文档、幻灯片和画布。画布上的画框可以排版、标注后交给 Agent，也可以留言、自己编辑，或导出成 Word 和 PowerPoint。把本地图片随产物一起提交并用相对路径引用，配对设备也能预览。静态 HTML 图片引用的本地文件缺失时，Kettu 会提醒 Agent。
 - **发布到 Kettu**：给 Artifact 一个 kettu.page 上的页面，可以只有自己能看、凭访问码看或公开。
 - **Computer use**：打开之后，Agent 能操作你电脑上的应用。
 - **Routines**：按时让 Agent 干活，每次运行都留成会话。

@@ -72,7 +72,7 @@ All your coding agents, side by side in one window that looks good and feels rig
 - **Git**: the branch, changes and pull request checks.
 - **Worktrees**: a session can work in a Git worktree of its own, which Kettu creates and cleans up.
 - **Built-in browser**: agents open pages, click, type and take screenshots; take over at any time.
-- **Artifacts**: the pages, documents, slides and canvases agents make. Lay out a canvas's frames and mark them up for the agent, comment, edit them yourself, or export them to Word and PowerPoint.
+- **Artifacts**: the pages, documents, slides and canvases agents make. Lay out a canvas's frames and mark them up for the agent, comment, edit them yourself, or export them to Word and PowerPoint. Bundle local pictures with the artifact and use relative paths to show them on paired devices. Kettu warns the agent if a static HTML image references a missing local file.
 - **Publish to Kettu**: give an artifact its own page on kettu.page, private, behind an access code or public.
 - **Computer use**: once you turn it on, agents use the apps on your computer.
 - **Routines**: run an agent on a schedule; every run is kept as a session.
