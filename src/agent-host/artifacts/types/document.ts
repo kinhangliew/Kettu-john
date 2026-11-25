@@ -1,6 +1,7 @@
 // The document type: Markdown with pictures, shown in a reading layout and exported to Word and
 // Markdown.
 
+import { imageOrigin } from '@shared/artifact-image'
 import { imagePathOf, isImagePath, markdownImages } from '@shared/artifact-document'
 import type { ContentDraft, TypePackage } from './registry'
 
@@ -8,12 +9,13 @@ import type { ContentDraft, TypePackage } from './registry'
 function checkDocument(draft: ContentDraft): string[] {
   const problems: string[] = []
   for (const image of markdownImages(draft.entry ?? '')) {
+    if (imageOrigin(image.target)) continue
     const path = imagePathOf(image.target)
     const at = `document.md line ${image.line}`
     if (path === null) {
       problems.push(
         `${at} shows ${image.target}, which is not a file of the artifact; add the picture in ` +
-          'files as images/<name>.png and show it as images/<name>.png.',
+          'files as images/<name>.png or use a direct HTTPS image URL without credentials.',
       )
     } else if (!isImagePath(path)) {
       problems.push(`${at} shows ${path}; pictures are PNG, JPEG or GIF files under images/.`)
@@ -32,7 +34,7 @@ const GUIDANCE =
   'file in your working directory, and show it with ![what it shows](images/<name>.png); then call ' +
   'create_artifact_from_type with type document. To change it, read_artifact and update_artifact ' +
   'as for any artifact, with edits on document.md. Hard rules: a document holds only document.md ' +
-  'and pictures under images/; pictures come from its own files, never from URLs; raw HTML is not ' +
+  'and pictures under images/; local and direct HTTPS pictures can be mixed; raw HTML is not ' +
   'shown; every write is checked, and a refusal says what to fix. The references markdown and ' +
   'images give the detail.'
 
@@ -54,7 +56,7 @@ const IMAGES =
   'pass through you; one file is at most 20 MiB, and a version 64 MiB and 256 files. Show one ' +
   'with ![what it shows](images/chart.png) on a line of its own; the text in brackets is read ' +
   'aloud and shown when the picture cannot be. A version may keep pictures the text does not ' +
-  'show, but every picture the text shows must be a file of the version. To remove one, give ' +
+  "show, and direct HTTPS images load with the owning project's revocable image permission. To remove one, give " +
   '{"path": "images/old.png", "remove": true} in update_artifact and take it out of the text.'
 
 export const documentType: TypePackage = {

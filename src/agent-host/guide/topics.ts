@@ -56,7 +56,9 @@ export const parts = (ref: TopicRef): Record<PartTopic, string> => ({
     'folders and has no `.` or `..` segment, backslash, control character or any of : * ? " < > |. ' +
     'Paths are case-sensitive, and no two may differ only in case. Paths starting with ' +
     `\`${ARTIFACT_RESERVED}\` are Kettu's. Scripts, styles and fonts may also load from ${CDNS}; ` +
-    'nothing else loads, so bring any other library or asset as a file of the artifact. Draw icons ' +
+    'images may also use direct HTTPS URLs. A user can approve or revoke an exact image origin ' +
+    'in the project menu on the host. Mix bundled files and URLs as the task requires. Pages ' +
+    'with files or sample capability can only use bundled images or inline data. Draw icons ' +
     'in the page itself, as inline `<svg>` or as `<symbol>`s in the page used with ' +
     '`<use href="#id">`, never with `<use>` from a separate sprite file: Kettu loads that whole ' +
     'file again for each icon. Give each ' +
@@ -65,7 +67,9 @@ export const parts = (ref: TopicRef): Record<PartTopic, string> => ({
     'or binary files, so their bytes never pass through you; one call carries at most 16 MiB in ' +
     'all. HTML files must be UTF-8. A version ' +
     `holds at most ${VERSION_FILES} files and 64 MiB. update_artifact changes only the files it ` +
-    'names. read_artifact lists the files of a version and returns the text of one at a time; ' +
+    'names. This is also how paired devices get pictures. If a write warns about missing HTML ' +
+    'images, correct the references and add the files with update_artifact before handing the ' +
+    'preview to the user. read_artifact lists the files of a version and returns the text of one at a time; ' +
     'images and other binary files are listed, not returned.',
   canvas:
     'A canvas holds several pages side by side, such as design options, the screens of a flow or ' +

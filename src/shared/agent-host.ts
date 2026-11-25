@@ -1329,6 +1329,11 @@ export interface HostContract {
   'projects.move': { params: { path: string; before: string | null }; result: void }
   'projects.noProject': { params: void; result: NoProject }
   // How the project names and prepares its sessions' worktrees.
+  'projects.imageOrigins': { params: { path: string }; result: string[] }
+  'projects.setImageOrigin': {
+    params: { path: string; origin: string; allowed: boolean }
+    result: void
+  }
   'projects.worktreeSettings': { params: { path: string }; result: ProjectWorktreeSettings }
   // A device needs the owner's leave to use the terminal to change these, as they run a command.
   'projects.setWorktreeSettings': {
@@ -1960,6 +1965,7 @@ export interface HostContract {
       title: string
       key: string
       strict: boolean
+      imageOrigins?: readonly string[]
       files: ArtifactContentFile[]
       type?: ArtifactTypeInfo | null
     }
@@ -2302,6 +2308,8 @@ export const HOST_METHODS = [
   'projects.pin',
   'projects.move',
   'projects.noProject',
+  'projects.imageOrigins',
+  'projects.setImageOrigin',
   'projects.worktreeSettings',
   'projects.setWorktreeSettings',
   'paths.complete',
@@ -2587,7 +2595,7 @@ export type HostEvent =
   | { type: 'idleRelease.changed'; state: IdleReleaseState }
   // To a port watching the host's load: the reading.
   | { type: 'host.load'; load: HostLoad }
-  | { type: 'artifacts.changed' } // the list changed; a page showing it reads again
+  | { type: 'artifacts.changed'; imagePolicyChanged?: boolean } // the list changed; a page showing it reads again
   | { type: 'artifacts.version'; id: string; version: number }
   // To every port: the owner's seen version of the artifact moved, as `artifacts.seen` recorded it.
   | { type: 'artifacts.seen'; id: string; version: number }

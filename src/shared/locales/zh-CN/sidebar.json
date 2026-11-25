@@ -1,4 +1,15 @@
 {
+  "imageSettings": {
+    "menu": "产物图片来源…",
+    "title": "{{project}} 的图片来源",
+    "hint": "允许此项目的产物预览从指定 HTTPS 来源加载图片。需要显示外链图片时，项目所在的电脑会访问该来源。",
+    "input": "HTTPS 图片链接或来源",
+    "allow": "允许来自 {{origin}} 的图片",
+    "remove": "移除",
+    "none": "尚未授权额外的图片来源。",
+    "invalid": "请输入有效的 HTTPS 链接。",
+    "retry": "重试"
+  },
   "nav": {
     "label": "项目和会话",
     "newSession": "新建会话",

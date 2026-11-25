@@ -160,6 +160,8 @@ export interface ArtifactFileInfo {
 export interface ArtifactContent {
   title: string
   version: number
+  strict?: boolean
+  previewKey?: string
   /** The entry page's text; empty for an artifact made from a type, whose viewer is its page, and for a canvas document without one. */
   html: string
   files: ArtifactFileInfo[]

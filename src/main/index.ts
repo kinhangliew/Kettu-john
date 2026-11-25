@@ -1,3 +1,4 @@
+import { fetchArtifactImage } from '@shared/artifact-image-fetch'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -921,6 +922,15 @@ async function start(): Promise<void> {
     hostClosed: (hostId, port) => hostSessions.closed(hostId, port),
   })
   const artifacts = new Artifacts({
+    image: (ref, version, url) => {
+      const { hostId, id } = artifactOn(ref)
+      return hostId !== null
+        ? remoteArtifacts.image(hostId, id, version, url)
+        : fetchArtifactImage(url, async () => {
+            const content = await agentHost.artifactContent(id, version, true)
+            return content.kind === 'found' ? content : null
+          })
+    },
     content: (ref, version) => {
       const { hostId, id } = artifactOn(ref)
       return hostId === null

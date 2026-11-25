@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import * as transport from '@shared/public-image-request'
 import { vi } from 'vitest'
 
 export const TRUSTED_IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
@@ -49,9 +50,13 @@ export async function imageEndpoints() {
     }
     return result
   })
+  const transportRoute = vi
+    .spyOn(transport, 'publicImageRequest')
+    .mockImplementation((url, signal) => fetch(url, { signal, redirect: 'manual' }))
   return {
     hits,
     async close() {
+      transportRoute.mockRestore()
       route.mockRestore()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },

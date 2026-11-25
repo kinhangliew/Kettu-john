@@ -2,6 +2,7 @@
 // artifacts service call, the watches that count viewers, and the purge of Recently deleted.
 // The records and files belong to the thread worker; this side only reads the files.
 
+import { imageOrigin } from '@shared/artifact-image'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isStrictDeclaration } from '@shared/artifact-capabilities'
@@ -86,7 +87,7 @@ export interface ArtifactStoreDeps {
   contentDir: string
   log: LogFn
   /** The list changed: an artifact came or went, was renamed or has a new version. */
-  changed(): void
+  changed(imagePolicyChanged?: boolean): void
   /** A new version, for the ports watching the artifact. */
   version(portIds: Iterable<string>, id: string, version: number): void
   activity(portIds: Iterable<string>, activity: ArtifactActivity): void
@@ -193,13 +194,18 @@ export class ArtifactStore {
     return (this.deps.now ?? Date.now)()
   }
 
-  // Until permission storage is wired, reads deny and mutations fail.
-  readonly imageOrigins: (project: string) => Promise<string[]> = async () => []
+  imageOrigins(project: string): Promise<string[]> {
+    return this.deps.imagePermissions?.list(project) ?? this.runtime('imageOrigins', { project })
+  }
 
-  readonly setImageOrigin: (project: string, url: string, allowed: boolean) => Promise<void> =
-    async () => {
-      throw new HostError('internal', 'Project image permissions are unavailable')
-    }
+  async setImageOrigin(project: string, url: string, allowed: boolean): Promise<void> {
+    const origin = imageOrigin(url)
+    if (!origin)
+      throw new HostError('invalid_params', 'Enter an exact HTTPS origin without credentials.')
+    if (this.deps.imagePermissions) await this.deps.imagePermissions.set(project, origin, allowed)
+    else await this.runtime('setImageOrigin', { project, origin, allowed })
+    this.deps.changed(true)
+  }
 
   private async call<K extends ArtifactCallName>(
     name: K,
@@ -385,7 +391,13 @@ export class ArtifactStore {
       this.get(id, version === undefined ? {} : { version }),
       this.runtime('declaration', { id, project: null, version: null }),
     ])
-    const key = versionKey(found.files)
+    const strict = isStrictDeclaration(latest.capabilities)
+    const imageOrigins = strict
+      ? []
+      : await this.imageOrigins(latest.project).catch((): string[] => [])
+    const key = createHash('sha256')
+      .update(JSON.stringify([versionKey(found.files), strict, imageOrigins]))
+      .digest('hex')
     return {
       version: found.version.version,
       title: found.artifact.title,
@@ -396,7 +408,8 @@ export class ArtifactStore {
             .update(`${key}\0${found.type.name}\0${found.type.format}`, 'utf8')
             .digest('hex')
         : key,
-      strict: isStrictDeclaration(latest.capabilities),
+      strict,
+      imageOrigins,
       files: found.files.map((file) => ({
         path: file.path,
         file: contentPath(this.deps.contentDir, file.hash),

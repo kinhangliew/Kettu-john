@@ -917,8 +917,8 @@ export class AgentHost {
       threads: this.threads,
       contentDir,
       log,
-      changed: () => {
-        this.hub.broadcast({ type: 'artifacts.changed' })
+      changed: (imagePolicyChanged) => {
+        this.hub.broadcast({ type: 'artifacts.changed', imagePolicyChanged })
         this.options.send({ type: 'host:artifacts-changed' })
       },
       version: (portIds, id, version) =>
@@ -3739,6 +3739,14 @@ export class AgentHost {
       'projects.move': ({ path, before }) =>
         projects.move(projects.match(path), before === null ? null : projects.match(before)),
       'projects.noProject': () => projects.noProject(),
+      'projects.imageOrigins': ({ path }, { device }) => {
+        if (device) throw new HostError('forbidden', t('hostError.showHere'))
+        return artifacts.imageOrigins(projects.match(path).path)
+      },
+      'projects.setImageOrigin': ({ path, origin, allowed }, { device }) => {
+        if (device) throw new HostError('forbidden', t('hostError.showHere'))
+        return artifacts.setImageOrigin(projects.match(path).path, origin, allowed)
+      },
       'projects.worktreeSettings': ({ path }) =>
         projects.worktreeSettings(projects.match(path).path),
       'projects.setWorktreeSettings': ({ path, settings }) =>
@@ -4097,6 +4105,7 @@ export class AgentHost {
         })),
       'artifacts.read': async ({ id, version }) => {
         const read = await artifacts.read(id, version === undefined ? {} : { version })
+        const policy = await artifacts.content(id, read.version.version)
         return {
           title: read.artifact.title,
           version: read.version.version,
@@ -4107,6 +4116,8 @@ export class AgentHost {
               ? ''
               : await artifacts.entryText(read),
           type: read.type,
+          strict: policy.strict,
+          previewKey: policy.key,
           seen: read.artifact.seen,
           files: read.files.map((file) => ({
             path: file.path,

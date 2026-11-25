@@ -47,6 +47,8 @@ interface Reach {
 }
 
 export interface RuntimeCalls {
+  imageOrigins: { params: { project: string }; result: string[] }
+  setImageOrigin: { params: { project: string; origin: string; allowed: boolean }; result: null }
   /** The artifact with a version's declaration, the latest's when `version` is null. */
   declaration: {
     params: Reach & { version: number | null }

@@ -25,6 +25,7 @@ import { fileManagerName, formatShortcut, isWeb } from '@renderer/lib/platform'
 import { useGitStore } from '@renderer/stores/git'
 import { useTerminalAllowed } from '@renderer/stores/hosts'
 import { openSettings } from '@renderer/stores/view'
+import { useImageSettings } from './project-image-settings-model'
 import { openProjectTerminal } from './project-menu-model'
 
 /**
@@ -82,6 +83,12 @@ export function ProjectMenuItems({
           <DropdownMenuItem disabled={gone} onClick={() => void openProjectTerminal(project.path)}>
             <MenuGlyph icon={ComputerTerminal01Icon} />
             {t('project.menu.openInTerminal')}
+          </DropdownMenuItem>
+        )}
+        {!isWeb && (
+          <DropdownMenuItem disabled={gone} onClick={() => useImageSettings.setState({ project })}>
+            <MenuGlyph icon={FolderOpenIcon} />
+            {t('imageSettings.menu')}
           </DropdownMenuItem>
         )}
         {revealable && (

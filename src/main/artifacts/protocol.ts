@@ -1,6 +1,9 @@
 // The `kettu-artifact` protocol: each artifact on an origin of its own, the files of its versions
 // from the store and nothing else.
 
+import { refuseRequests } from '../request-filter'
+import { ARTIFACT_IMAGE_PATH } from '@shared/artifact-image'
+import { fetchArtifactImage, imageVersion, type ArtifactImage } from '@shared/artifact-image-fetch'
 import { createReadStream } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -52,6 +55,7 @@ export const artifactScheme: CustomScheme = {
 export interface ArtifactSource {
   /** `artifacts/content/` in the data folder, where the bytes of every file lie. */
   contentDir: string
+  image?(id: string, version: number, url: string): Promise<ArtifactImage | null>
   /** Where the files main fetched from other hosts lie, when it shows their artifacts. */
   remoteDir?: string
   /** The artifact on this origin id, when it was opened in this run. */
@@ -172,9 +176,38 @@ function runtimeRequest(request: Request, source: ArtifactSource): Promise<Respo
 }
 
 /** Answers one request on an artifact origin: a file of the version it names, or of the latest. */
-export async function respond(request: Request, source: ArtifactSource): Promise<Response> {
+export async function respond(
+  request: Request,
+  source: ArtifactSource,
+  destinationFiltered = false,
+): Promise<Response> {
   if (isRuntimeRequest(request.url)) return runtimeRequest(request, source)
   if (request.method !== 'GET') return answer(405)
+  const url = new URL(request.url)
+  if (url.pathname === ARTIFACT_IMAGE_PATH) {
+    const host = artifactHost(request.url)
+    const id = host && source.artifactOf(host)
+    const version = imageVersion(url.searchParams.get('version'))
+    const target = url.searchParams.get('url')
+    if (
+      !id ||
+      !version ||
+      !target ||
+      (!destinationFiltered && request.headers.get('sec-fetch-dest') !== 'image')
+    )
+      return answer(404)
+    const image = source.image
+      ? await source.image(id, version, target)
+      : await fetchArtifactImage(target, async () => {
+          const content = await source.content(id, version)
+          return content.kind === 'found' ? content : null
+        })
+    return image
+      ? new Response(image.bytes, {
+          headers: { ...artifactHeaders(true), 'Content-Type': image.type },
+        })
+      : answer(404)
+  }
   const wanted = parseRequest(request.url, (host) => source.artifactOf(host))
   if (!wanted) return answer(404)
   const remote = parseArtifactRef(wanted.id)?.hostId != null
@@ -187,6 +220,7 @@ export async function respond(request: Request, source: ArtifactSource): Promise
   )
   if (found.kind === 'not_found') return answer(404)
   if (found.kind === 'failed') return answer(503)
+  source.declared?.(wanted.id, found.strict)
   if (found.type) {
     // A typed artifact's page is its type's viewer, which reads the content files beside it.
     if (wanted.path === ARTIFACT_ENTRY) {
@@ -197,14 +231,21 @@ export async function respond(request: Request, source: ArtifactSource): Promise
         viewerBase(wanted.version),
       )
       if (!page) return answer(404)
-      const headers = { ...artifactHeaders(), 'Content-Type': artifactFileType(ARTIFACT_ENTRY) }
-      const html = servedHtml(page, null, { path: ARTIFACT_ENTRY, transport: 'fetch' })
+      const headers = {
+        ...artifactHeaders(found.strict),
+        'Content-Type': artifactFileType(ARTIFACT_ENTRY),
+      }
+      const html = servedHtml(page, null, {
+        path: ARTIFACT_ENTRY,
+        transport: 'fetch',
+        imageVersion: found.type.name === 'document' ? found.version : undefined,
+      })
       return new Response(html, { headers })
     }
     if (wanted.path.startsWith(VIEWER_PREFIX)) {
       const file = await source.viewers?.find(wanted.path.slice(VIEWER_PREFIX.length))
       if (!file) return answer(404)
-      return streamed(file, artifactFileType(wanted.path))
+      return streamed(file, artifactFileType(wanted.path), found.strict)
     }
   }
   const file = found.files.find((f) => f.path === wanted.path)
@@ -228,13 +269,13 @@ export async function respond(request: Request, source: ArtifactSource): Promise
     )
     if (!ready) return answer(503)
   }
-  source.declared?.(wanted.id, found.strict)
   const headers = { ...artifactHeaders(found.strict), 'Content-Type': artifactFileType(file.path) }
   try {
     if (isHtmlPath(file.path)) {
       const html = servedHtml(await readFile(file.file, 'utf8'), wanted.page, {
         path: file.path,
         transport: 'fetch',
+        imageVersion: found.version,
       })
       return new Response(html, { headers })
     }
@@ -248,12 +289,20 @@ export async function respond(request: Request, source: ArtifactSource): Promise
 }
 
 /** A viewer file. It lies in the app's archive, which a read stream reads in place. */
-function streamed(file: string, type: string): Response {
+function streamed(file: string, type: string, strict: boolean): Response {
   const body = Readable.toWeb(createReadStream(file)) as ReadableStream<Uint8Array>
-  return new Response(body, { headers: { ...artifactHeaders(), 'Content-Type': type } })
+  return new Response(body, { headers: { ...artifactHeaders(strict), 'Content-Type': type } })
 }
 
 /** Serves artifacts through the session's `kettu-artifact` protocol. */
 export function serveArtifacts(session: Session, source: ArtifactSource): void {
-  session.protocol.handle(ARTIFACT_SCHEME, (request) => respond(request, source))
+  // Custom protocol requests omit Fetch Metadata. Electron classifies the resource before dispatch.
+  refuseRequests(
+    session,
+    (details) =>
+      details.url.startsWith(ARTIFACT_SCHEME + ':') &&
+      URL.parse(details.url)?.pathname === ARTIFACT_IMAGE_PATH &&
+      details.resourceType !== 'image',
+  )
+  session.protocol.handle(ARTIFACT_SCHEME, (request) => respond(request, source, true))
 }

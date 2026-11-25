@@ -21,6 +21,7 @@ import { parsePairingLink, type PairingState } from '@shared/remote/pairing'
 import { BACKGROUND_PACE_MS, PROTOCOL_VERSION } from '@shared/remote/protocol'
 import { encodeRelayBytes, importRelayKey, newRelaySeed, relayHostId } from '@shared/remote/relay'
 import { startTestHost, type TestHost } from '../agent-host/testing/harness'
+import { imageEndpoints, TRUSTED_IMAGE_ORIGIN, TEST_PNG } from '../testing/artifact-images'
 import { ActivityLog } from './activity'
 import { DeviceStore } from './devices'
 import { DiscoveryRequests } from './discovery'
@@ -310,6 +311,31 @@ describe('a paired device', () => {
       path: string
     }
     const token = /^\/frame\/([A-Za-z0-9_-]{43})\/$/.exec(folder)![1]!
+    const owner = t.agent.connect()
+    const grant = { path: t.agent.project, origin: TRUSTED_IMAGE_ORIGIN, allowed: true }
+    await expect(device.port.request('projects.setImageOrigin', grant)).rejects.toMatchObject({
+      code: 'forbidden',
+    })
+    await owner.request('projects.add', { path: t.agent.project })
+    await owner.request('projects.setImageOrigin', grant)
+    const upstream = await imageEndpoints()
+    try {
+      const readImage = () =>
+        call(device)('artifacts.frameImage', {
+          path: folder,
+          version: 1,
+          url: TRUSTED_IMAGE_ORIGIN + '/picture.png',
+        })
+      const result = (await readImage()) as { type: string; bytes: { $stream: number } }
+      expect(result.type).toBe('image/png')
+      expect(result.bytes.$stream).toBeTypeOf('number')
+      expect(await device.download(result.bytes.$stream)).toEqual(Uint8Array.from(TEST_PNG))
+      await owner.request('projects.setImageOrigin', { ...grant, allowed: false })
+      expect(await readImage()).toBeNull()
+      expect(upstream.hits).toEqual(['/trusted/picture.png'])
+    } finally {
+      await upstream.close()
+    }
     const runtime = (message: unknown, at = folder) =>
       call(device)('artifacts.frameRuntime', { path: at, message })
     const readOne = { v: 1, id: 'c1', kind: 'call', cap: 'files', op: 'read', args: {} }

@@ -21,6 +21,7 @@ export interface Frame<S> {
    * A page of the frame loaded with the CDNs in its policy, so it could send out what it reads:
    * it is offered nothing that reads beyond the artifact until it is opened anew.
    */
+  sensitive?: boolean
   lax: boolean
 }
 

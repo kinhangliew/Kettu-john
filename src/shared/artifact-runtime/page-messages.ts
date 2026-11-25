@@ -27,6 +27,7 @@ export interface RuntimeConfig {
   v: typeof RUNTIME_VERSION
   /** `fetch` posts to RUNTIME_PATH on the page's origin; `port` waits for the client's port. */
   transport: 'fetch' | 'port'
+  imageVersion?: number
   /** The served file's path in its version. */
   path: string
   /** What the file's start tags are marked with, before their offsets, in this response. */

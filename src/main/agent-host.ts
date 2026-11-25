@@ -597,9 +597,13 @@ export class AgentHost {
   }
 
   /** The file of an artifact's version, the latest when `version` is null; `failed` without a host. */
-  artifactContent(id: string, version: number | null): Promise<ArtifactContentResult> {
+  artifactContent(
+    id: string,
+    version: number | null,
+    fresh = false,
+  ): Promise<ArtifactContentResult> {
     if (this.host.state !== 'ready') return Promise.resolve({ kind: 'failed' })
-    return this.contents.get(id, version)
+    return fresh ? this.askContent(id, version) : this.contents.get(id, version)
   }
 
   private askContent(id: string, version: number | null): Promise<ArtifactContentResult> {

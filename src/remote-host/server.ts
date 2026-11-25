@@ -6,6 +6,7 @@
 // sessions to the host's parent. From protocol version 2 a session outlives its connection for a
 // while, what it sends waiting in its outbox, and the device's next connection may take it over.
 
+import { fetchArtifactImage } from '@shared/artifact-image-fetch'
 import { addLogSecret } from '@shared/log/process-log'
 import { randomBytes } from 'node:crypto'
 import { open, realpath, type FileHandle } from 'node:fs/promises'
@@ -515,25 +516,41 @@ export class RemoteServer {
     token: string,
     version: number | null,
     path: string,
-  ): Promise<{ file: string; size: number; strict: boolean } | null> {
+  ): Promise<{ file: string; size: number; strict: boolean; version?: number } | null> {
     const frame = this.frames.find(token)
-    if (!frame) return null
+    if (!frame?.session.connected) return null
     const content = await frame.session.artifactContent(frame.artifactId, version)
     const found = content?.files.find((file) => file.path === path)
     if (!content || !found) return null
     if (isHtmlPath(path) && !content.strict) frame.lax = true
-    return { file: found.file, size: found.size, strict: content.strict }
+    return { file: found.file, size: found.size, version: content.version, strict: content.strict }
+  }
+
+  async frameImagePolicy(token: string, version: number) {
+    const frame = this.frames.find(token)
+    if (!frame?.session.connected || frame.sensitive) return null
+    const content = await frame.session.artifactContent(frame.artifactId, version)
+    if (
+      this.frames.find(token) !== frame ||
+      !frame.session.connected ||
+      content?.version !== version
+    )
+      return null
+    return content
   }
 
   /** The type of the version a frame's token names, or null for a plain artifact or none. */
   async frameType(
     token: string,
     version: number | null,
-  ): Promise<{ type: ArtifactTypeInfo; version: number } | null> {
+  ): Promise<{ type: ArtifactTypeInfo; version: number; strict: boolean } | null> {
     const frame = this.frames.find(token)
     if (!frame) return null
     const content = await frame.session.artifactContent(frame.artifactId, version)
-    return content?.type ? { type: content.type, version: content.version } : null
+    if (content?.type && !content.strict) frame.lax = true
+    return content?.type
+      ? { type: content.type, version: content.version, strict: content.strict }
+      : null
   }
 
   sessionEnded(session: DeviceSession): void {
@@ -1546,6 +1563,7 @@ class DeviceSession {
     if (method === 'media.read') return void this.readMedia(id, params)
     if (method === 'artifacts.openFrame') return void this.openFrame(id, params)
     if (method === 'artifacts.closeFrame') return this.closeFrame(id, params)
+    if (method === 'artifacts.frameImage') return void this.frameImage(id, params)
     if (method === 'artifacts.frameRuntime') return this.frameRuntime(id, params)
     const named = findPlaces(value as Record<string, unknown>, 'params', isUploadRef)
     if (named.length === 0) return this.forward(value)
@@ -1743,6 +1761,36 @@ class DeviceSession {
     if (typeof id === 'number') this.send({ type: 'response', id, result: null })
   }
 
+  private async frameImage(id: unknown, params: unknown): Promise<void> {
+    if (typeof id !== 'number') return
+    const { path, version, url } = (params ?? {}) as Record<string, unknown>
+    const token =
+      typeof path === 'string' && path.startsWith(FRAME_PATH) && path.endsWith('/')
+        ? path.slice(FRAME_PATH.length, -1)
+        : ''
+    const frame = this.server.frames.find(token)
+    if (!frame || frame.session !== this)
+      return this.send({
+        type: 'error',
+        id,
+        error: { code: 'not_found', message: t('remote.noFrame') },
+      })
+    const image =
+      typeof url === 'string' &&
+      typeof version === 'number' &&
+      Number.isSafeInteger(version) &&
+      version > 0
+        ? await fetchArtifactImage(url, () => this.server.frameImagePolicy(token, version))
+        : null
+    if (!this.connected || this.server.frames.find(token) !== frame)
+      return this.send({ type: 'response', id, result: null })
+    this.toDevice({
+      type: 'response',
+      id,
+      result: image && { type: image.type, bytes: image.bytes.buffer },
+    })
+  }
+
   /**
    * A device's `artifacts.frameRuntime`: a page's message from the frame at `path`, which goes to
    * the agent host as the runtime request of the frame's artifact, untouched. A stream's events
@@ -1767,6 +1815,7 @@ class DeviceSession {
       kind?: unknown
       cap?: unknown
     }
+    if (!frame.lax && (cap === 'files' || cap === 'sample')) frame.sensitive = true
     if (frame.lax && (cap === 'files' || cap === 'sample')) {
       const header = messageHeader(message)
       const result =

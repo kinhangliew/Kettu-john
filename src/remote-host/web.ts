@@ -3,6 +3,8 @@
 // message one Noise message. The direct listener hands over each connection that starts with an
 // HTTP request; nothing here listens on its own.
 
+import { ARTIFACT_IMAGE_PATH, type ImagePolicy } from '@shared/artifact-image'
+import { fetchArtifactImage, imageVersion } from '@shared/artifact-image-fetch'
 import { createReadStream } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -152,10 +154,7 @@ export interface WebServerOptions {
   server: Pick<RemoteServer, 'accept' | 'refusedOne' | 'frameFile'> &
     Partial<Pick<RemoteServer, 'frameType'>> & {
       /** A live frame's current policy, or null if its session or version cannot be verified. */
-      frameImagePolicy?(
-        token: string,
-        version: number,
-      ): Promise<{ strict: boolean; imageOrigins: readonly string[] } | null>
+      frameImagePolicy?(token: string, version: number): Promise<ImagePolicy | null>
     }
   /** The direct port's, which a WebSocket's handshake spends like a TCP connection's. */
   limits: HandshakeLimits
@@ -277,12 +276,40 @@ export class WebServer {
   ): Promise<void> {
     const host = request.headers.host
     if (!host || !HOST.test(host)) return plain(response, 400, 'The host is not valid.')
+    if (rest === ARTIFACT_IMAGE_PATH) {
+      const version = imageVersion(params.get('version'))
+      const target = params.get('url')
+      const image =
+        request.method === 'GET' &&
+        request.headers['sec-fetch-dest'] === 'image' &&
+        version &&
+        target
+          ? await fetchArtifactImage(
+              target,
+              async () => (await this.options.server.frameImagePolicy?.(token, version)) ?? null,
+            )
+          : null
+      if (!image) return plain(response, 404, notFound(request), { 'Cache-Control': 'no-store' })
+      response.writeHead(200, {
+        'Content-Type': image.type,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+      })
+      response.end(image.bytes)
+      return
+    }
     const wanted = parseServed(rest, params)
     if (!wanted) return plain(response, 404, notFound(request), frameCors(request))
     if (wanted.path === ARTIFACT_ENTRY || wanted.path.startsWith(VIEWER_PREFIX)) {
       const typed = await this.options.server.frameType?.(token, wanted.version)
       if (typed) {
-        const headers = frameHeaders(request, host, `${FRAME_PATH}${token}/`, false)
+        const headers = frameHeaders(
+          request,
+          host,
+          `${FRAME_PATH}${token}/`,
+          typed.strict !== false,
+        )
         if (wanted.path.startsWith(VIEWER_PREFIX)) {
           const viewers = await this.loadViewers()
           const file = viewers?.get(`/${wanted.path.slice(VIEWER_PREFIX.length)}`)
@@ -301,7 +328,11 @@ export class WebServer {
           viewerBase(wanted.version),
         )
         if (!page) return plain(response, 404, notFound(request), frameCors(request))
-        const html = servedHtml(page, null, { path: ARTIFACT_ENTRY, transport: 'port' })
+        const html = servedHtml(page, null, {
+          path: ARTIFACT_ENTRY,
+          transport: 'port',
+          imageVersion: typed.type.name === 'document' ? typed.version : undefined,
+        })
         const body = Buffer.from(html, 'utf8')
         const type = artifactFileType(ARTIFACT_ENTRY)
         response.writeHead(200, { ...headers, 'Content-Type': type, 'Content-Length': body.length })
@@ -319,6 +350,7 @@ export class WebServer {
     const html = servedHtml(await readFile(found.file, 'utf8'), wanted.page, {
       path: wanted.path,
       transport: 'port',
+      imageVersion: found.version ?? wanted.version ?? undefined,
     })
     const body = Buffer.from(html, 'utf8')
     response.writeHead(200, { ...headers, 'Content-Type': type, 'Content-Length': body.length })

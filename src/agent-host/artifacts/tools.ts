@@ -56,6 +56,7 @@ import {
 import type { Platform } from '@shared/platform'
 import type { FileChange } from './model'
 import type { Declaration } from './runtime/calls'
+import { htmlImageProblems } from './html-images'
 import { countPages } from './pages'
 import { readSource, SourceError } from './sources'
 import { HostError } from '../errors'
@@ -78,6 +79,7 @@ const MINUTE_MS = 60_000
 const MIB = 1024 * 1024
 /** The paths a refusal names when it lists a version's files. */
 const LISTED_PATHS = 20
+const IMAGE_PROBLEMS = 8
 
 export type ToolErrorCode =
   'not_found' | 'deleted' | 'conflict' | 'edit_not_found' | 'too_large' | 'invalid' | 'rate_limited'
@@ -964,6 +966,7 @@ interface Draft {
   changes: FileChange[]
   pages: number
   files: number
+  imageProblems: string[]
   /** The version holds a canvas document. */
   canvas: boolean
   /** Where the write changes something, for the writer's pointer; null for the document alone. */
@@ -1024,6 +1027,16 @@ function pagesText(pages: number, canvas = false): string {
 
 function filesText(files: number): string {
   return files > 1 ? ` in ${files} files` : ''
+}
+
+function imageProblemsText(problems: readonly string[]): string {
+  if (!problems.length) return ''
+  return (
+    '\nSome HTML images may not show in local or remote previews:\n' +
+    problems.map((problem) => `- ${problem}`).join('\n') +
+    '\nUse relative URLs and include the image files with source in update_artifact. ' +
+    'If an image is outside your working directory, stage a copy inside it first.'
+  )
 }
 
 function count(n: number, one: string, many: string): string {
@@ -1339,9 +1352,16 @@ export class ArtifactTools {
           'make one file. Rename one of them.',
       )
     }
+    const imageProblems: string[] = []
     for (const [path, bytes] of changed) {
-      if (bytes && isHtmlPath(path) && utf8(bytes) === null) {
-        throw invalid(`${path} is not UTF-8 text; HTML files must be.`)
+      if (bytes && isHtmlPath(path)) {
+        const html = utf8(bytes)
+        if (html === null) throw invalid(`${path} is not UTF-8 text; HTML files must be.`)
+        if (!type && imageProblems.length < IMAGE_PROBLEMS) {
+          imageProblems.push(
+            ...htmlImageProblems(html, path, sizes, IMAGE_PROBLEMS - imageProblems.length),
+          )
+        }
       }
     }
     if (type) await this.checkType(type, base, sizes, changed)
@@ -1357,6 +1377,7 @@ export class ArtifactTools {
             ? countPages(entry.toString('utf8'))
             : (base?.version.pages ?? 0),
       files: sizes.size,
+      imageProblems,
       canvas: doc !== null,
       focus: focusOf(changed, texts, firstEdit),
     }
@@ -1469,7 +1490,8 @@ export class ArtifactTools {
       )
       return result(
         `Created ${id} version ${version}, ${pagesText(draft.pages, draft.canvas)}${filesText(draft.files)}.` +
-          placesText(id, places, 'Its places'),
+          placesText(id, places, 'Its places') +
+          imageProblemsText(draft.imageProblems),
         { id, version, pages: draft.pages, ...placeFields(id, places) },
       )
     })
@@ -1704,7 +1726,8 @@ export class ArtifactTools {
       return result(
         `Updated ${artifactId} to version ${version}, ${pagesText(draft.pages, draft.canvas)}` +
           `${filesText(draft.files)}.` +
-          placesText(artifactId, changed, 'The places it changed'),
+          placesText(artifactId, changed, 'The places it changed') +
+          imageProblemsText(draft.imageProblems),
         { id: artifactId, version, pages: draft.pages, ...placeFields(artifactId, changed) },
       )
     }

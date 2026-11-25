@@ -91,7 +91,7 @@ export function parseServed(pathname: string, params: URLSearchParams): ServedFi
 export function servedHtml(
   html: string,
   page: CanvasPage | null,
-  served: { path: string; transport: RuntimeConfig['transport'] },
+  served: { path: string; transport: RuntimeConfig['transport']; imageVersion?: number },
 ): string {
   const mark = sourceMark()
   const marked = markSources(html, mark)
@@ -100,6 +100,7 @@ export function servedHtml(
     v: RUNTIME_VERSION,
     transport: served.transport,
     path: served.path,
+    imageVersion: served.imageVersion,
     mark,
   })
 }

@@ -31,6 +31,7 @@ import { SidebarList, SidebarNotices } from '@renderer/features/sidebar/app-side
 import { useSidebarNav } from '@renderer/features/sidebar/sidebar-nav'
 import { ArchiveConfirmDialog } from '@renderer/features/sidebar/archive-confirm'
 import { RemoveWorktreeDialog } from '@renderer/features/worktrees/remove-worktree-dialog'
+import { ProjectImageSettings } from '@renderer/features/sidebar/project-image-settings'
 import { WorktreeSettingsDialog } from '@renderer/features/worktrees/worktree-settings-dialog'
 import { SearchDialog } from '@renderer/features/search/search-dialog'
 import { ReportDialog } from '@renderer/features/report/report-dialog'
@@ -136,6 +137,7 @@ export function App() {
         <SearchDialog />
         <ArchiveConfirmDialog />
         <RemoveWorktreeDialog />
+        <ProjectImageSettings />
         <WorktreeSettingsDialog />
         <ReportDialog />
         {/* Kettu's browser, which sign-ins are brought into, runs in the desktop app alone. */}

@@ -4,6 +4,8 @@
 // what it sends goes through one transport, which the server chose: a POST to its own origin on the
 // desktop, or the port the web client hands it. Bundled on its own, it reaches nothing of Kettu's.
 
+import { ARTIFACT_CDNS } from '../artifact-policy'
+import { ARTIFACT_IMAGE_PATH, imageOrigin } from '../artifact-image'
 import type { RuntimeError } from '../artifact-capabilities'
 import {
   PARAMS_ATTRIBUTE,
@@ -53,6 +55,38 @@ export function start(config: RuntimeConfig): void {
   const parent = window.parent
   let counter = 0
   const nextId = (): string => `k${++counter}`
+
+  if (config.imageVersion) {
+    const version = String(config.imageVersion)
+    const frame =
+      config.transport === 'port'
+        ? location.pathname.match(/^\/frame\/[A-Za-z0-9_-]{43}\//)?.[0]
+        : '/'
+    const cdns: readonly string[] = ARTIFACT_CDNS
+    const rewrite = (image: HTMLImageElement): void => {
+      const src = image.getAttribute('src')
+      if (!src || !frame) return
+      const origin = imageOrigin(src)
+      if (!origin || cdns.includes(origin) || origin === location.origin) return
+      const params = new URLSearchParams({ version, url: src })
+      image.src = new URL(frame + ARTIFACT_IMAGE_PATH.slice(1) + '?' + params, location.href).href
+    }
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === 'attributes' && record.target instanceof HTMLImageElement)
+          rewrite(record.target)
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLImageElement) rewrite(node)
+          else if (node instanceof Element) node.querySelectorAll('img').forEach(rewrite)
+        }
+      }
+    }).observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src'],
+    })
+  }
 
   // The transport.
 

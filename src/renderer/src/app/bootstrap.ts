@@ -1,3 +1,4 @@
+import { imagePolicyChanged } from '@renderer/features/artifacts/thumbnails'
 import type { HostEvent } from '@shared/agent-host'
 import type { AgentId } from '@shared/agents'
 import {
@@ -192,7 +193,10 @@ function onHostEvent(event: HostEvent, hostId: string | null = null): void {
       return
   }
   receiveArtifactEvent(event, hostId)
-  if (event.type === 'artifacts.changed') artifactsChanged(hostId)
+  if (event.type === 'artifacts.changed') {
+    if (event.imagePolicyChanged) imagePolicyChanged()
+    artifactsChanged(hostId)
+  }
   if (event.type === 'memory.changed') memoryChanged(hostId)
   if (event.type === 'plugins.changed') {
     void loadKettuCommands(hostId)

@@ -1,4 +1,15 @@
 {
+  "imageSettings": {
+    "menu": "Artifact image sources…",
+    "title": "Image sources for {{project}}",
+    "hint": "Allow previews in this project to load images from an exact HTTPS origin. The project host contacts that origin when a preview needs an image.",
+    "input": "HTTPS image URL or origin",
+    "allow": "Allow images from {{origin}}",
+    "remove": "Remove",
+    "none": "No additional sources allowed.",
+    "invalid": "Enter a valid HTTPS URL.",
+    "retry": "Try again"
+  },
   "nav": {
     "label": "Projects and sessions",
     "newSession": "New session",

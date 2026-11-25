@@ -4,6 +4,7 @@
 // capability messages go to the host through a frame it opens there, which names the artifact,
 // and the host checks each as it does a paired device's.
 
+import { imageType, type ArtifactImage } from '@shared/artifact-image-fetch'
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -57,6 +58,8 @@ export interface RemoteArtifactsDeps {
 }
 
 interface Read {
+  previewKey: string
+  strict: boolean
   version: number
   title: string
   type: ArtifactTypeInfo | null
@@ -81,7 +84,7 @@ function parseType(value: unknown): ArtifactTypeInfo | null | undefined {
 /** A host's answer to `artifacts.read`, checked; null for anything else. */
 export function parseRead(value: unknown): Read | null {
   if (typeof value !== 'object' || value === null) return null
-  const { version, title, files } = value as Record<string, unknown>
+  const { version, title, files, strict, previewKey } = value as Record<string, unknown>
   const type = parseType((value as Record<string, unknown>).type)
   if (!Number.isSafeInteger(version) || (version as number) < 1) return null
   if (typeof title !== 'string' || title.length > MAX_TITLE || type === undefined) return null
@@ -100,7 +103,15 @@ export function parseRead(value: unknown): Read | null {
     list.push({ path: name, size: size as number })
   }
   if (total > VERSION_BYTES) return null
-  return { version: version as number, title, type, files: list }
+  return {
+    version: version as number,
+    title,
+    type,
+    files: list,
+    strict: strict !== false,
+    previewKey:
+      typeof previewKey === 'string' && /^[0-9a-f]{64}$/.test(previewKey) ? previewKey : '',
+  }
 }
 
 function bytesOf(value: unknown): Uint8Array | null {
@@ -192,12 +203,35 @@ export class RemoteArtifacts {
   }
 
   /** An external image requires a live check from the host that owns the artifact. */
-  readonly image: (
+  async image(
     hostId: string,
     id: string,
     version: number,
     url: string,
-  ) => Promise<{ type: string; bytes: Uint8Array } | null> = async () => null
+    retry = true,
+  ): Promise<ArtifactImage | null> {
+    const frame = this.frame(hostId, id)
+    try {
+      const opened = await frame
+      const result = await this.deps.call(hostId, 'artifacts.frameImage', {
+        path: opened,
+        version,
+        url,
+      })
+      const bytes = bytesOf(result)
+      const type = (result as { type?: unknown } | null)?.type
+      return imageType(type) && bytes && bytes.byteLength <= 8 * 1024 * 1024
+        ? { type, bytes: Uint8Array.from(bytes) }
+        : null
+    } catch (error) {
+      if (retry && codeOf(error) === 'not_found') {
+        const key = artifactRef(hostId, id)
+        if (this.frames.get(key) === frame) this.frames.delete(key)
+        return this.image(hostId, id, version, url, false)
+      }
+      return null
+    }
+  }
 
   /**
    * Fetches the files of a version that `paths` names, every one when null, unless a run fetched
@@ -343,10 +377,11 @@ export class RemoteArtifacts {
         version: read.version,
         title: read.title,
         // What the host's own key would name: these files, and for a type its format.
-        key: hash(`${name}\0${read.type?.name ?? ''}\0${read.type?.format ?? ''}`),
-        // The host does not say what the version declares. A page that asks to read beyond itself
-        // loses the CDNs then, as the request filter does for any origin.
-        strict: false,
+        key: hash(
+          `${name}\0${read.previewKey}\0${read.type?.name ?? ''}\0${read.type?.format ?? ''}`,
+        ),
+        strict: read.strict,
+        imageOrigins: [],
         files: read.files.map((file) => ({
           path: file.path,
           file: path.join(folder, hash(file.path).slice(0, 32)),
@@ -414,13 +449,7 @@ export class RemoteArtifacts {
     this.pruneTimer.unref()
   }
 
-  private async send(
-    hostId: string,
-    id: string,
-    message: unknown,
-    stream: string | undefined,
-    again = false,
-  ): Promise<RuntimeAnswer> {
+  private frame(hostId: string, id: string): Promise<string> {
     const key = artifactRef(hostId, id)
     let frame = this.frames.get(key)
     if (!frame) {
@@ -436,6 +465,18 @@ export class RemoteArtifacts {
         if (this.frames.get(key) === frame) this.frames.delete(key)
       })
     }
+    return frame
+  }
+
+  private async send(
+    hostId: string,
+    id: string,
+    message: unknown,
+    stream: string | undefined,
+    again = false,
+  ): Promise<RuntimeAnswer> {
+    const key = artifactRef(hostId, id)
+    const frame = this.frame(hostId, id)
     const opened = await frame
     try {
       const answer = await this.deps.call(hostId, 'artifacts.frameRuntime', {

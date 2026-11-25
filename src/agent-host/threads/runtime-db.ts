@@ -55,6 +55,11 @@ type Row = Record<string, SQLOutputValue>
 export type RuntimeFail = (message: string, code: ThreadErrorCode, data?: ArtifactState) => Error
 
 export function prepareRuntime(db: DatabaseSync) {
+  // This fork also opens official profiles. Keep its private table outside upstream migrations.
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS fork_project_image_origins (project TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY(project, origin)) STRICT, WITHOUT ROWID',
+  )
+
   const sql = (text: string): StatementSync => db.prepare(text)
   return {
     artifact: sql('SELECT id, project, title, head, deleted_at FROM artifacts WHERE id = ?'),
@@ -301,6 +306,22 @@ function dataQuery(ctx: RuntimeContext, params: RuntimeCalls['dataQuery']['param
 export function runtimeCall(ctx: RuntimeContext, call: RuntimeCall): unknown {
   const { sql } = ctx
   switch (call.name) {
+    case 'imageOrigins':
+      return ctx.db
+        .prepare('SELECT origin FROM fork_project_image_origins WHERE project = ? ORDER BY origin')
+        .all(call.params.project)
+        .map((row) => String(row.origin))
+    case 'setImageOrigin': {
+      const { project, origin, allowed } = call.params
+      ctx.db
+        .prepare(
+          allowed
+            ? 'INSERT OR IGNORE INTO fork_project_image_origins VALUES (?, ?)'
+            : 'DELETE FROM fork_project_image_origins WHERE project = ? AND origin = ?',
+        )
+        .run(project, origin)
+      return null
+    }
     case 'declaration':
       return declaration(ctx, call.params)
     case 'dataGet': {

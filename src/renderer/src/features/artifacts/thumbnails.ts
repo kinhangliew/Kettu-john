@@ -127,9 +127,19 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
+let imageRevision = 0
+export function imagePolicyChanged(): void {
+  imageRevision++
+  for (const listener of listeners) listener()
+}
+
+function useImageRevision(): number {
+  return useSyncExternalStore(subscribe, () => imageRevision)
+}
+
 /** The card's thumbnail, asked for while `inView`. */
 export function useThumbnail(artifact: ThumbnailOf, inView: boolean): Thumbnail {
-  const key = keyOf(artifact)
+  const key = `${useImageRevision()}:${keyOf(artifact)}`
   const thumbnail = useSyncExternalStore(subscribe, () => made.get(key) ?? LOADING)
   useEffect(() => {
     if (!inView) return
@@ -151,7 +161,7 @@ export function usePartThumbnail(
   part: ThumbnailPart,
   inView: boolean,
 ): Thumbnail {
-  const key = `${id}:${version}:${JSON.stringify(part)}`
+  const key = `${useImageRevision()}:${id}:${version}:${JSON.stringify(part)}`
   const thumbnail = useSyncExternalStore(subscribe, () => made.get(key) ?? LOADING)
   useEffect(() => {
     if (!inView) return

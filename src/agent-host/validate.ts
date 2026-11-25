@@ -1826,6 +1826,11 @@ export function createValidators(platform: Platform): Validators {
       }
     },
     'projects.noProject': none,
+    'projects.imageOrigins': folder,
+    'projects.setImageOrigin': (params) => {
+      const o = fields(params)
+      return { ...folder(params), origin: string(o, 'origin', 2048), allowed: flag(o, 'allowed') }
+    },
     'projects.worktreeSettings': folder,
     'projects.setWorktreeSettings': (params) => {
       const o = fields(params)

@@ -27,6 +27,9 @@
     // Node.js only: the desktop's processes' logs and the socket a host listens on.
     "log/**",
     "socket-port.ts",
+    "artifact-image-fetch.ts",
+    "public-lookup.ts",
+    "public-image-request.ts",
     // Runs inside an artifact's page.
     "artifact-runtime/runtime.ts"
   ]

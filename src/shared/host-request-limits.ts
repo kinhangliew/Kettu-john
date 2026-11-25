@@ -101,6 +101,8 @@ export const HOST_REQUEST_LIMITS: Readonly<Record<HostMethod, number | null>> = 
   'projects.pin': HOST_MS,
   'projects.move': HOST_MS,
   'projects.noProject': HOST_MS,
+  'projects.imageOrigins': HOST_MS,
+  'projects.setImageOrigin': HOST_MS,
   'projects.worktreeSettings': HOST_MS,
   'projects.setWorktreeSettings': HOST_MS,
   'paths.complete': HOST_MS,
