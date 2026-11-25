@@ -281,13 +281,6 @@ export class PiConnection implements AgentConnection {
     return this.done
   }
 
-  processOf(sessionId: string): number | null {
-    const child = this.sessions.get(sessionId)?.proc?.child
-    return child && child.exitCode === null && child.signalCode === null
-      ? (child.pid ?? null)
-      : null
-  }
-
   /** A session Kettu opens for itself is never saved, so nothing of it stays in pi's history. */
   get hiddenSessions(): boolean {
     return true
@@ -655,6 +648,7 @@ export class PiConnection implements AgentConnection {
       const servers = piServers(session.options.mcpServers ?? [])
       if (servers.length > 0) extra[SERVERS_VARIABLE] = JSON.stringify(servers)
     }
+    for (const root of session.options.skillRoots ?? []) args.push('--skill', root)
     if (session.hidden && start.kind !== 'fork') args.push('--no-session')
     else if (start.kind === 'fork') args.push('--fork', start.file)
     else if (start.kind === 'resume') {
