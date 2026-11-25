@@ -150,7 +150,13 @@ export interface WebServerOptions {
   /** The type viewers' built files; by default the folder beside the web client's. */
   viewers?: string | null
   server: Pick<RemoteServer, 'accept' | 'refusedOne' | 'frameFile'> &
-    Partial<Pick<RemoteServer, 'frameType'>>
+    Partial<Pick<RemoteServer, 'frameType'>> & {
+      /** A live frame's current policy, or null if its session or version cannot be verified. */
+      frameImagePolicy?(
+        token: string,
+        version: number,
+      ): Promise<{ strict: boolean; imageOrigins: readonly string[] } | null>
+    }
   /** The direct port's, which a WebSocket's handshake spends like a TCP connection's. */
   limits: HandshakeLimits
   log: LogFn

@@ -10,6 +10,13 @@ import {
 } from '@shared/artifact-runtime/page-messages'
 import type { RuntimeAnswer } from '@shared/artifact-capabilities'
 import type { ArtifactContentFile } from '@shared/host-control'
+import {
+  frameImageUrl,
+  imageEndpoints,
+  TEST_PNG,
+  TRUSTED_IMAGE_ORIGIN as IMAGE_ORIGIN,
+  UNTRUSTED_IMAGE_ORIGIN as OTHER_ORIGIN,
+} from '../../testing/artifact-images'
 import { ARTIFACT_CSP, ARTIFACT_STRICT_CSP } from './policy'
 import { respond, type ArtifactSource } from './protocol'
 import { readBody, type RuntimeRelay } from './runtime'
@@ -17,7 +24,6 @@ import { readBody, type RuntimeRelay } from './runtime'
 const HOST = '0123456789abcdef0123456789'
 const ORIGIN = `kettu-artifact://${HOST}`
 const ID = 'art_01J9Z3K4V5W6X7Y8Z9A0B1C2D3'
-const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
 
 let dir: string
 let asked: (number | null)[]
@@ -193,7 +199,7 @@ describe('the page runtime on an artifact origin', () => {
 
 describe("an artifact's policy", () => {
   it.each([null, { name: 'document' as const, format: 1 }])(
-    'V01/V02 uses the owning project image grants in the desktop entry for %j',
+    'P06/V01/V02 checks current permissions for image requests from the same desktop origin for %j',
     async (type) => {
       const content = source.content
       let imageOrigins: string[] = []
@@ -201,20 +207,45 @@ describe("an artifact's policy", () => {
         const result = await content(id, version)
         return result.kind === 'found' ? { ...result, type, imageOrigins } : result
       }
-      const open = async () => {
+      const upstream = await imageEndpoints()
+      try {
         const response = await get(`${ORIGIN}/_kettu/v/2/index.html`)
         expect(response.status).toBe(200)
-        const image = await get(`${ORIGIN}/_kettu/v/2/img/my%20photo.png`)
-        expect(await image.arrayBuffer()).toEqual(Uint8Array.of(0x89, 0x50).buffer)
-        return response.headers.get('Content-Security-Policy')!.split('; ')
+        await response.text()
+        const local = async () => {
+          const image = await get(`${ORIGIN}/_kettu/v/2/img/my%20photo.png`)
+          expect(image.headers.get('content-type')).toBe('image/png')
+          expect(await image.arrayBuffer()).toEqual(Uint8Array.of(0x89, 0x50).buffer)
+        }
+        const request = (target: string) =>
+          respond(
+            new Request(frameImageUrl(`${ORIGIN}/`, 2, target), {
+              headers: { 'Sec-Fetch-Dest': 'image' },
+            }),
+            source,
+          )
+        const trusted = `${IMAGE_ORIGIN}/t.png`
+        const denied = async (target: string) => {
+          const before = [...upstream.hits]
+          expect((await request(target)).ok).toBe(false)
+          expect(upstream.hits).toEqual(before)
+        }
+        await local()
+        await denied(trusted)
+        imageOrigins = [IMAGE_ORIGIN]
+        const allowed = await request(trusted)
+        expect.soft(allowed.status).toBe(200)
+        expect.soft(allowed.headers.get('content-type')).toBe('image/png')
+        expect.soft(Buffer.from(await allowed.arrayBuffer())).toEqual(TEST_PNG)
+        expect.soft(upstream.hits).toEqual(['/trusted/t.png'])
+        await denied(`${OTHER_ORIGIN}/u.png`)
+        imageOrigins = []
+        await denied(trusted)
+        await local()
+        expect(asked.every((version) => version === 2)).toBe(true)
+      } finally {
+        await upstream.close()
       }
-      expect((await open()).join(' ')).not.toContain(IMAGE_ORIGIN)
-      imageOrigins = [IMAGE_ORIGIN]
-      expect((await open()).filter((directive) => directive.includes(IMAGE_ORIGIN))).toEqual([
-        expect.stringMatching(/^img-src /),
-      ])
-      imageOrigins = []
-      expect((await open()).join(' ')).not.toContain(IMAGE_ORIGIN)
     },
   )
 

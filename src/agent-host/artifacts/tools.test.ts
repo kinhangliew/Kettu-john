@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startThreadService } from '../threads/service'
 import { ThreadStoreError, type ThreadStore } from '../threads/store'
-import { ArtifactStore } from './store'
+import { ArtifactStore, type ArtifactStoreDeps } from './store'
 import { ArtifactTools, type Caller } from './tools'
 import { ArtifactTypes } from './types/registry'
 import { writeContent } from './types/writes'
@@ -20,7 +20,7 @@ const OTHER_ORIGIN = 'https://other.example'
 const LOCAL_IMAGE = 'images/local.png'
 
 /** The thread service in this thread, answering as the worker would. */
-function threadsAt(folder: string, permissionFailure?: Error): ThreadStore {
+function threadsAt(folder: string): ThreadStore {
   const pending = new Map<number, { resolve(value: unknown): void; reject(e: unknown): void }>()
   let next = 0
   const handle = startThreadService(
@@ -35,22 +35,19 @@ function threadsAt(folder: string, permissionFailure?: Error): ThreadStore {
   )
   const ask =
     (op: 'artifact' | 'runtime') =>
-    (name: string, params: unknown): Promise<unknown> => {
-      if (permissionFailure && op === 'runtime' && name !== 'declaration') {
-        return Promise.reject(permissionFailure)
-      }
-      return new Promise((resolve, reject) => {
+    (name: string, params: unknown): Promise<unknown> =>
+      new Promise((resolve, reject) => {
         const id = ++next
         pending.set(id, { resolve, reject })
         handle({ id, op, call: { name, params } as never })
       })
-    }
   return { artifact: ask('artifact'), runtime: ask('runtime') } as unknown as ThreadStore
 }
 
-function openStore(threads = threadsAt(dir)): ArtifactStore {
+function openStore(imagePermissions?: ArtifactStoreDeps['imagePermissions']): ArtifactStore {
   return new ArtifactStore({
-    threads,
+    threads: threadsAt(dir),
+    ...(imagePermissions ? { imagePermissions } : {}),
     contentDir: path.join(dir, 'content'),
     log: () => {},
     changed: () => {},
@@ -233,7 +230,7 @@ describe('document image writes', () => {
     }
   })
 
-  it.each(['images/missing.png', '../images/outside.png', 'images/local.svg'])(
+  it.each(['images/missing.png', '../images/outside.png'])(
     'W07 rejects %s and keeps the earlier version readable',
     async (url) => {
       const markdown = `# Before\n\n![Local](${LOCAL_IMAGE})\n`
@@ -256,6 +253,32 @@ describe('document image writes', () => {
       expect(read.value).toMatchObject({ version: 1, text: markdown })
     },
   )
+
+  it('W07 refuses a supplied SVG as an unsupported format and keeps the earlier version', async () => {
+    const svg = { path: 'images/vector.svg', source: 'assets/vector.svg' }
+    writeFileSync(
+      path.join(work, svg.source),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="M0 0h1v1z"/></svg>',
+    )
+    const markdown = `# Before\n\n![Local](${LOCAL_IMAGE})\n`
+    const invalid = `# Invalid\n\n![Vector](${svg.path})\n`
+    const first = await call('create_artifact_from_type', documentInput(markdown))
+    expect(first.error).toBeNull()
+    const id = first.value.id as string
+    const draft = documentInput(invalid)
+    for (const { error } of [
+      await call('create_artifact_from_type', { ...draft, files: [...draft.files, svg] }),
+      await call('update_artifact', { id, base_version: 1, files: [...draft.files, svg] }),
+    ]) {
+      expect(error?.code).toBe('invalid')
+      expect(error?.message).toContain(svg.path)
+      expect(error?.message).toMatch(/PNG, JPEG or GIF/)
+    }
+    expect((await call('read_artifact', { id })).value).toMatchObject({
+      version: 1,
+      text: markdown,
+    })
+  })
 
   it.each([
     'http://example.org/a.png',
@@ -407,19 +430,27 @@ describe('project image permissions', () => {
 
   it('P11 reports persistence errors and serves the saved files without external grants when reading fails', async () => {
     const id = await create({ html: '<p>Local content</p>' })
-    await store.setImageOrigin(work, IMAGE_ORIGIN, true)
     const failed = new Error('Permission storage unavailable')
-    const unavailable = openStore(threadsAt(dir, failed))
-    await expect(unavailable.imageOrigins(work)).rejects.toThrow(failed.message)
-    for (const allowed of [true, false]) {
-      await expect(unavailable.setImageOrigin(work, IMAGE_ORIGIN, allowed)).rejects.toThrow(
-        failed.message,
-      )
+    const permissions = {
+      list: vi.fn().mockRejectedValue(failed),
+      set: vi.fn().mockRejectedValue(failed),
     }
-    await expect(unavailable.content(id, 1)).resolves.toMatchObject({
-      imageOrigins: [],
+    const unavailable = openStore(permissions)
+    await expect.soft(unavailable.imageOrigins(work)).rejects.toThrow(failed.message)
+    expect.soft(permissions.list).toHaveBeenCalledExactlyOnceWith(work)
+    for (const allowed of [true, false]) {
+      await expect
+        .soft(unavailable.setImageOrigin(work, IMAGE_ORIGIN, allowed))
+        .rejects.toThrow(failed.message)
+      expect.soft(permissions.set).toHaveBeenCalledWith(work, IMAGE_ORIGIN, allowed)
+    }
+    permissions.list.mockClear()
+    const found = await unavailable.content(id, 1)
+    expect(found).toMatchObject({
       files: [expect.objectContaining({ path: 'index.html' })],
     })
+    expect(found.imageOrigins ?? []).toEqual([])
+    expect(permissions.list).toHaveBeenCalledWith(work)
   })
 })
 

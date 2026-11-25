@@ -79,6 +79,10 @@ export interface ArtifactActivity {
 
 export interface ArtifactStoreDeps {
   threads: ThreadStore | null
+  imagePermissions?: {
+    list(project: string): Promise<string[]>
+    set(project: string, origin: string, allowed: boolean): Promise<void>
+  }
   contentDir: string
   log: LogFn
   /** The list changed: an artifact came or went, was renamed or has a new version. */
@@ -373,6 +377,7 @@ export class ArtifactStore {
     title: string
     key: string
     strict: boolean
+    imageOrigins?: readonly string[]
     files: ContentFile[]
     type: ArtifactTypeInfo | null
   }> {

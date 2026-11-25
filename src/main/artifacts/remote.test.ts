@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { RuntimeAnswer } from '@shared/artifact-capabilities'
 import { artifactRef } from '@shared/artifacts'
+import { imageEndpoints, TEST_PNG } from '../../testing/artifact-images'
 import { ArtifactOrigins, originId } from './origins'
 import { isStored } from './protocol'
 import { parseRead, RemoteArtifacts } from './remote'
@@ -124,32 +125,53 @@ describe("another host's artifacts in main", () => {
   })
 
   it.each([null, { name: 'document', format: 1 }])(
-    'P05/P06/V05/V06 keeps the remote grant on its own host and refreshes it after revoke for %j',
+    'P05/P06/P10/V05/V06 keeps image requests on their live owning host for %j',
     async (type) => {
       const base = answer
-      let imageOrigins = [IMAGE_ORIGIN]
-      answer = (call) => {
-        const result = base(call)
-        if (call.method !== 'artifacts.read') return result
-        return {
-          ...(result as object),
-          type,
-          imageOrigins: call.hostId === HOST_B ? imageOrigins : [],
+      const upstream = await imageEndpoints()
+      let allowed = false
+      let connected = true
+      const trusted = `${IMAGE_ORIGIN}/t.png`
+      answer = async (call) => {
+        if (call.hostId === HOST_B && !connected) {
+          throw { code: 'host_offline', message: 'offline' }
         }
+        if (call.method === 'artifacts.read') return { ...(base(call) as object), type }
+        if (call.method !== 'artifacts.frameImage') return base(call)
+        expect(call.params).toMatchObject({ path: FRAME, version: 1, url: trusted })
+        if (!allowed || call.hostId !== HOST_B) {
+          throw { code: 'forbidden', message: 'no current permission' }
+        }
+        const image = await fetch(trusted)
+        return { type: image.headers.get('content-type'), bytes: await image.arrayBuffer() }
       }
-      await expect(remote.content(HOST_B, ID, 1)).resolves.toMatchObject({
-        imageOrigins: [IMAGE_ORIGIN],
-      })
-      const isolated = await remote.content(HOST_A, ID, 1)
-      if (isolated.kind !== 'found') throw new Error('Fixture version not found')
-      expect(isolated.imageOrigins ?? []).toEqual([])
-      await remote.fetch(HOST_B, ID, 1, ['img/a.png'])
-      imageOrigins = []
-      remote.changed()
-      const revoked = await remote.content(HOST_B, ID, 1)
-      expect(revoked).toMatchObject({ imageOrigins: [] })
-      if (revoked.kind !== 'found') throw new Error('Fixture version not found')
-      expect(readFileSync(revoked.files[1]!.file, 'utf8')).toBe('b:img/a.png:v1')
+      try {
+        const content = await remote.content(HOST_B, ID, 1)
+        if (content.kind !== 'found') throw new Error('Fixture version not found')
+        await remote.fetch(HOST_B, ID, 1, ['img/a.png'])
+        const image = (host = HOST_B) => remote.image(host, ID, 1, trusted)
+        expect(await image()).toBeNull()
+        expect(upstream.hits).toEqual([])
+
+        allowed = true
+        expect.soft(await image()).toEqual({ type: 'image/png', bytes: Uint8Array.from(TEST_PNG) })
+        expect.soft(upstream.hits).toEqual(['/trusted/t.png'])
+        const hitsAfterGrant = [...upstream.hits]
+        expect(await image(HOST_A)).toBeNull()
+        allowed = false
+        expect(await image()).toBeNull()
+        expect(upstream.hits).toEqual(hitsAfterGrant)
+
+        allowed = true
+        connected = false
+        expect(await image()).toBeNull()
+        remote.ended(HOST_B)
+        expect(await image()).toBeNull()
+        expect(upstream.hits).toEqual(hitsAfterGrant)
+        expect(readFileSync(content.files[1]!.file, 'utf8')).toBe('b:img/a.png:v1')
+      } finally {
+        await upstream.close()
+      }
     },
   )
 

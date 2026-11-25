@@ -23,16 +23,23 @@ absent from A.
 Run each cell in all three phases:
 
 1. With no grant, open the card and reader. L decodes. T and U make no image request.
-2. In the trusted project UI on B, grant T's origin once. Reopen the same artifact version
-   in every cell. L and T decode. U makes no request.
+2. In the trusted project UI on B, grant T's origin once. Trigger a fresh image load in the
+   same open frame and check that L and T decode. U makes no request. Repeat with the same
+   artifact version reopened.
 3. Revoke the grant on B while the previews are open. Trigger a fresh image load in the
    existing frame, then reopen the same version. T and U make no new request. L still decodes.
    Record card and reader separately if the card shows only a summary.
 
 Record the host/client identities, artifact ID and version, image decode results, and request
-evidence for each cell. Remove signed query parameters from the record. On each web path verify
-that an invalid or closed frame token cannot retrieve L. Count only tests on actual devices as
-two-computer verification. Record missing prerequisites and count simulated protocol runs separately.
+evidence for each cell, including request counts observed at T and U. Remove signed query
+parameters from the record. On each web path try an invalid or closed frame token while T is
+granted. L is unavailable and the attempt sends zero new requests to T and U.
+
+For V07 and V08 record the actual connection mode. Direct uses B's serving port and a live
+frame token. Hosted or relay-only sessions can return `preview_only` when opening a frame.
+Record that result and the available preview as a separate relay-only observation. A direct
+run covers the direct connection alone. Count only tests on actual devices as two-computer
+verification. Record missing prerequisites and count simulated protocol runs separately.
 
 ## Additional runtime checks
 
@@ -53,7 +60,8 @@ two-computer verification. Record missing prerequisites and count simulated prot
   issues a request for T.
 - **P06** After revocation, trigger a new image load in an open page and repeat with a reopened
   historical version and a newly created card. Inspect requests in all three cases.
-- **P07** Have the trusted endpoint redirect to U. Confirm that U receives no image request.
+- **P07** Have T return a redirect to U. Confirm that T logs the initial request and U logs zero
+  requests.
   Independently serve a 404, a non-image body, a timeout, and a corrupt image. In each case T fails
   or shows alt text and L still decodes.
 - **P08** Use T as an image, script, stylesheet, font, media source, child frame and API endpoint.
@@ -61,10 +69,11 @@ two-computer verification. Record missing prerequisites and count simulated prot
 - **P09** With T approved, open latest versions declaring `files` or `sample` and their earlier
   versions in desktop and web including a cold remote cache. L decodes and neither T nor an
   external CDN receives a request, starting at first load.
-- **P10** Try a legacy host, disconnect, unresolved project or strict state, a missing image, and
-  a transfer failure. Verified local version bytes may still be delivered. Check that no new
-  external permission is inferred and no file is substituted from another host, project or
-  version.
+- **P10** With T still granted, disconnect A from B while the artifact stays open. Trigger a new
+  image load without refreshing the frame. T and U each receive zero new requests. Verified
+  cached bytes for L may still be displayed. Also try a legacy host, unresolved project or
+  strict state, a missing image, and a transfer failure. Check that no new external permission
+  is inferred and no file is substituted from another host, project or version.
 - **P11** Simulate read and persistence failures. Confirm the trusted UI reports failure for
   lookup, grant and revoke. A client without a confirmed permission starts no external image requests.
 

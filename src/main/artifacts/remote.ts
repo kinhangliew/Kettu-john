@@ -191,6 +191,14 @@ export class RemoteArtifacts {
     return this.cache.get(artifactRef(hostId, id), version)
   }
 
+  /** An external image requires a live check from the host that owns the artifact. */
+  readonly image: (
+    hostId: string,
+    id: string,
+    version: number,
+    url: string,
+  ) => Promise<{ type: string; bytes: Uint8Array } | null> = async () => null
+
   /**
    * Fetches the files of a version that `paths` names, every one when null, unless a run fetched
    * them before; a path the version does not list is left out.

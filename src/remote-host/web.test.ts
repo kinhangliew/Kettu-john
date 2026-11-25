@@ -3,12 +3,17 @@ import { createServer, type Server } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  frameImageUrl,
+  imageEndpoints,
+  TEST_PNG,
+  TRUSTED_IMAGE_ORIGIN as IMAGE_ORIGIN,
+  UNTRUSTED_IMAGE_ORIGIN as OTHER_ORIGIN,
+} from '../testing/artifact-images'
 import { HandshakeLimits } from './limits'
 import { WebServer } from './web'
 
 const TOKEN = 'A'.repeat(43)
-const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
-const OTHER_ORIGIN = 'https://other.example'
 const LOCAL_IMAGE = 'images/local.png'
 
 let dir: string
@@ -20,21 +25,26 @@ let strict: boolean
 let typed: boolean
 let imageOrigins: string[]
 let active: boolean
+let connected: boolean
+let permissionsReadable: boolean
 
 beforeEach(async () => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'kettu-web-frames-'))
   const files: Record<string, string> = {
     'index.html': '<!doctype html><html><head></head><body><p>hi</p></body></html>',
     'style.css': 'p{}',
-    [LOCAL_IMAGE]: 'local image bytes',
   }
   mkdirSync(path.join(dir, 'images'))
+  writeFileSync(path.join(dir, LOCAL_IMAGE), TEST_PNG)
   for (const [name, text] of Object.entries(files)) writeFileSync(path.join(dir, name), text)
   asked = []
   strict = false
   typed = false
   active = true
+  connected = true
+  permissionsReadable = true
   imageOrigins = []
+  const live = (token: string) => active && connected && token === TOKEN
   web = new WebServer({
     root: null,
     server: {
@@ -42,15 +52,20 @@ beforeEach(async () => {
       refusedOne: () => {},
       frameFile: async (token, version, wanted) => {
         asked.push({ version, path: wanted })
-        const text = active && token === TOKEN ? files[wanted] : undefined
-        return text === undefined
+        const size = wanted === LOCAL_IMAGE ? TEST_PNG.length : files[wanted]?.length
+        return !live(token) || size === undefined
           ? null
-          : { file: path.join(dir, wanted), size: text.length, strict, imageOrigins }
+          : { file: path.join(dir, wanted), size, strict, imageOrigins }
       },
       frameType: async (token, version) =>
-        active && token === TOKEN && typed
+        live(token) && typed
           ? { type: { name: 'document', format: 1 }, version: version ?? 2, strict, imageOrigins }
           : null,
+      frameImagePolicy: async (token, version) => {
+        if (!live(token) || (version !== 1 && version !== 2)) return null
+        if (!permissionsReadable) throw new Error('Image permission lookup failed')
+        return { strict, imageOrigins }
+      },
     },
     limits: new HandshakeLimits(),
     log: () => {},
@@ -70,36 +85,147 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+function getFrameImage(frame: string, target: string, destination = 'image', version = 1) {
+  return fetch(frameImageUrl(frame, version, target), {
+    headers: { 'Sec-Fetch-Dest': destination },
+    redirect: 'manual',
+  })
+}
+
 describe("the direct port's artifact frames", () => {
   it.each(['HTML', 'document'])(
-    'V03/V04/V07/V08 scopes the %s frame to its token and current image permission',
+    'P06/P10/V03–V04/V07–V08 checks every image request of the same direct %s frame',
     async (format) => {
       typed = format === 'document'
-      const folder = `${base}/frame/${TOKEN}/_kettu/v/1`
-      const readPolicy = async () => {
+      const upstream = await imageEndpoints()
+      try {
+        const frame = `${base}/frame/${TOKEN}/`
+        const folder = `${frame}_kettu/v/1`
         const page = await fetch(`${folder}/index.html`)
         expect(page.status).toBe(200)
-        expect(page.headers.get('cache-control')).toBe('no-store')
-        const local = await fetch(`${folder}/${LOCAL_IMAGE}`)
-        expect(local.status).toBe(200)
-        expect(local.headers.get('content-type')).toBe('image/png')
-        expect(await local.text()).toBe('local image bytes')
-        const csp = page.headers.get('content-security-policy')!
-        expect(csp).not.toContain(OTHER_ORIGIN)
-        return csp.split('; ').filter((directive) => directive.includes(IMAGE_ORIGIN))
+        await page.text()
+        const local = async () => {
+          const response = await fetch(`${folder}/${LOCAL_IMAGE}`)
+          expect(response.headers.get('content-type')).toBe('image/png')
+          expect(Buffer.from(await response.arrayBuffer())).toEqual(TEST_PNG)
+        }
+        const denied = async (target: string, from = frame) => {
+          const before = [...upstream.hits]
+          const response = await getFrameImage(from, target)
+          expect(response.ok).toBe(false)
+          await response.arrayBuffer()
+          expect(upstream.hits).toEqual(before)
+        }
+        const trusted = `${IMAGE_ORIGIN}/t.png`
+        const untrusted = `${OTHER_ORIGIN}/u.png`
+
+        await local()
+        await denied(trusted)
+        await denied(untrusted)
+
+        imageOrigins = [IMAGE_ORIGIN]
+        const allowed = await getFrameImage(frame, trusted)
+        expect.soft(allowed.status).toBe(200)
+        expect.soft(allowed.headers.get('content-type')).toBe('image/png')
+        expect.soft(allowed.headers.get('cache-control')).toContain('no-store')
+        expect.soft(Buffer.from(await allowed.arrayBuffer())).toEqual(TEST_PNG)
+        expect.soft(upstream.hits).toEqual(['/trusted/t.png'])
+        await denied(untrusted)
+        const fake = `${base}/frame/${'Z'.repeat(43)}/`
+        await denied(trusted, fake)
+        expect(await fetch(`${fake}_kettu/v/1/${LOCAL_IMAGE}`).then((r) => r.status)).toBe(404)
+
+        permissionsReadable = false
+        await denied(trusted)
+        await local()
+        permissionsReadable = true
+
+        imageOrigins = []
+        await denied(trusted)
+        await denied(untrusted)
+        await local()
+
+        imageOrigins = [IMAGE_ORIGIN]
+        connected = false
+        await denied(trusted)
+        await denied(untrusted)
+        expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.ok)).toBe(false)
+        connected = true
+        active = false
+        await denied(trusted)
+        expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.ok)).toBe(false)
+      } finally {
+        await upstream.close()
       }
-      expect(await readPolicy()).toEqual([])
+    },
+  )
+
+  it('P07 checks an HTTP redirect before making the next outbound request', async () => {
+    const upstream = await imageEndpoints()
+    try {
+      const frame = `${base}/frame/${TOKEN}/`
       imageOrigins = [IMAGE_ORIGIN]
-      expect(await readPolicy()).toEqual([expect.stringMatching(/^img-src /)])
-      imageOrigins = []
-      expect(await readPolicy()).toEqual([])
-      expect(
-        await fetch(`${base}/frame/${'Z'.repeat(43)}/_kettu/v/1/${LOCAL_IMAGE}`).then(
-          (r) => r.status,
-        ),
-      ).toBe(404)
-      active = false
-      expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.status)).toBe(404)
+      const page = await fetch(`${frame}_kettu/v/1/index.html`)
+      expect(page.status).toBe(200)
+      await page.text()
+      const imageSources = page.headers
+        .get('content-security-policy')
+        ?.split(';')
+        .find((part) => part.trim().startsWith('img-src '))
+        ?.trim()
+        .split(/\s+/)
+      expect(imageSources).toBeDefined()
+      for (const source of [IMAGE_ORIGIN, OTHER_ORIGIN, 'https:', '*']) {
+        expect(imageSources).not.toContain(source)
+      }
+      const result = await getFrameImage(frame, `${IMAGE_ORIGIN}/redirect.png`)
+      expect(result.ok).toBe(false)
+      expect(result.headers.has('location')).toBe(false)
+      expect(upstream.hits).toEqual(['/trusted/redirect.png'])
+    } finally {
+      await upstream.close()
+    }
+  })
+
+  it.each([
+    'https://oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://sibling.oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://child.test-enabler.oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://test-enabler.oss-cn-hongkong.aliyuncs.com.example.org/t.png',
+    `${IMAGE_ORIGIN}:8443/t.png`,
+  ])('P03 a granted origin cannot extend the live request to %s', async (target) => {
+    const upstream = await imageEndpoints()
+    try {
+      const frame = `${base}/frame/${TOKEN}/`
+      imageOrigins = [IMAGE_ORIGIN]
+      const allowed = await getFrameImage(frame, `${IMAGE_ORIGIN}/t.png`)
+      expect.soft(allowed.status).toBe(200)
+      await allowed.arrayBuffer()
+      const denied = await getFrameImage(frame, target)
+      expect(denied.ok).toBe(false)
+      expect(upstream.hits).toEqual(['/trusted/t.png'])
+    } finally {
+      await upstream.close()
+    }
+  })
+
+  it.each(['script', 'style', 'font', 'video', 'iframe', 'empty'])(
+    'P08 image permission does not authorize a %s request',
+    async (destination) => {
+      const upstream = await imageEndpoints()
+      try {
+        const frame = `${base}/frame/${TOKEN}/`
+        const trusted = `${IMAGE_ORIGIN}/t.png`
+        imageOrigins = [IMAGE_ORIGIN]
+        const allowed = await getFrameImage(frame, trusted)
+        expect.soft(allowed.status).toBe(200)
+        await allowed.arrayBuffer()
+        const denied = await getFrameImage(frame, trusted, destination)
+        expect(denied.ok).toBe(false)
+        expect(upstream.hits).toEqual(['/trusted/t.png'])
+      } finally {
+        await upstream.close()
+      }
     },
   )
 
@@ -109,14 +235,24 @@ describe("the direct port's artifact frames", () => {
       typed = format === 'document'
       strict = true
       imageOrigins = [IMAGE_ORIGIN]
-      for (const version of [1, 2]) {
-        const folder = `${base}/frame/${TOKEN}/_kettu/v/${version}`
-        const page = await fetch(`${folder}/index.html`)
-        expect(page.status).toBe(200)
-        expect(page.headers.get('content-security-policy')).not.toMatch(/https:/)
-        expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.text())).toBe(
-          'local image bytes',
-        )
+      const upstream = await imageEndpoints()
+      try {
+        const frame = `${base}/frame/${TOKEN}/`
+        for (const version of [1, 2]) {
+          const folder = `${frame}_kettu/v/${version}`
+          const page = await fetch(`${folder}/index.html`)
+          expect(page.status).toBe(200)
+          await page.text()
+          expect.soft(page.headers.get('content-security-policy')).not.toMatch(/https:/)
+          const local = await fetch(`${folder}/${LOCAL_IMAGE}`)
+          expect(Buffer.from(await local.arrayBuffer())).toEqual(TEST_PNG)
+          const external = await getFrameImage(frame, `${IMAGE_ORIGIN}/t.png`, 'image', version)
+          expect(external.ok).toBe(false)
+          await external.arrayBuffer()
+        }
+        expect(upstream.hits).toEqual([])
+      } finally {
+        await upstream.close()
       }
     },
   )
