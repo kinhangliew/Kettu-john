@@ -55,11 +55,6 @@ type Row = Record<string, SQLOutputValue>
 export type RuntimeFail = (message: string, code: ThreadErrorCode, data?: ArtifactState) => Error
 
 export function prepareRuntime(db: DatabaseSync) {
-  // This fork also opens official profiles. Keep its private table outside upstream migrations.
-  db.exec(
-    'CREATE TABLE IF NOT EXISTS fork_project_image_origins (project TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY(project, origin)) STRICT, WITHOUT ROWID',
-  )
-
   const sql = (text: string): StatementSync => db.prepare(text)
   return {
     artifact: sql('SELECT id, project, title, head, deleted_at FROM artifacts WHERE id = ?'),

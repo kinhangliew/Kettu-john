@@ -817,6 +817,11 @@ export class ThreadDb {
         this.log('info', `Migrated ${path.basename(this.file)} from schema version ${version}`)
       }
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;')
+      // This fork also opens official profiles. Keep its private table outside upstream migrations.
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS fork_project_image_origins (project TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY(project, origin)) STRICT, WITHOUT ROWID',
+      )
+
       this.sql = prepareAll(db)
       this.db = db
     } catch (error) {

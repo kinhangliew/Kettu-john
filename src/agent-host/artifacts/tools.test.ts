@@ -13,6 +13,7 @@ let dir: string
 let work: string
 let tools: ArtifactTools
 let store: ArtifactStore
+const services: ReturnType<typeof startThreadService>[] = []
 let caller: Caller
 
 const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
@@ -33,6 +34,7 @@ function threadsAt(folder: string): ThreadStore {
       else waiting?.reject(new ThreadStoreError(reply.message, reply.code, reply.data))
     },
   )
+  services.push(handle)
   const ask =
     (op: 'artifact' | 'runtime') =>
     (name: string, params: unknown): Promise<unknown> =>
@@ -74,7 +76,10 @@ beforeEach(() => {
   caller = { sessionId: 's1', project: work }
 })
 
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(() => {
+  for (const handle of services.splice(0)) handle({ id: 0, op: 'close' })
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+})
 
 async function call(name: string, input: unknown) {
   const result = await tools.call(caller, name, input)
