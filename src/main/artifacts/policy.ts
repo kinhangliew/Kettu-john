@@ -44,6 +44,12 @@ export function artifactHeaders(strict = false): Record<string, string> {
  * Whether a page on the artifact origin `host` may request `url`, whatever its policy says; a
  * `strict` one only its own origin, `data:` and `blob:`.
  */
+export function mayRequest(
+  host: string,
+  url: string,
+  strict?: boolean,
+  images?: { resourceType: string; origins: readonly string[] },
+): boolean
 export function mayRequest(host: string, url: string, strict = false): boolean {
   const parsed = URL.parse(url)
   if (!parsed) return false

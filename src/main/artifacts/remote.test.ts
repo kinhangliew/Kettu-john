@@ -12,6 +12,8 @@ const HOST_A = 'a'.repeat(32)
 const HOST_B = 'b'.repeat(32)
 const ID = 'art_01J9Z3K4V5W6X7Y8Z9A0B1C2D3'
 const FRAME = `/frame/${'t'.repeat(43)}/`
+const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
+const OTHER_ID = 'art_01J9Z3K4V5W6X7Y8Z9A0B1C2D4'
 
 type Call = { hostId: string; method: string; params: Record<string, unknown> }
 
@@ -43,6 +45,8 @@ beforeEach(() => {
         title: `On ${hostId[0]}`,
         version: (params.version as number | undefined) ?? 2,
         html: '',
+        strict: false,
+        imageOrigins: [],
         files: [
           { path: 'index.html', size: 1, type: 'text/html' },
           { path: 'img/a.png', size: 1, type: 'image/png' },
@@ -92,6 +96,126 @@ describe("another host's answer to artifacts.read", () => {
 })
 
 describe("another host's artifacts in main", () => {
+  it('W09 addresses the saved image by host, artifact ID and version', async () => {
+    const base = answer
+    answer = (call) =>
+      call.method === 'artifacts.file'
+        ? {
+            bytes: new TextEncoder().encode(
+              JSON.stringify([call.hostId, call.params.id, call.params.version]),
+            ),
+          }
+        : base(call)
+    const paths = new Set<string>()
+    for (const [host, id, version] of [
+      [HOST_B, ID, 1],
+      [HOST_B, ID, 2],
+      [HOST_B, OTHER_ID, 1],
+      [HOST_A, ID, 1],
+    ] as const) {
+      const found = await remote.content(host, id, version)
+      if (found.kind !== 'found') throw new Error('Fixture version not found')
+      await remote.fetch(host, id, version, ['img/a.png'])
+      const image = found.files.find((file) => file.path === 'img/a.png')!
+      paths.add(image.file)
+      expect(JSON.parse(readFileSync(image.file, 'utf8'))).toEqual([host, id, version])
+    }
+    expect(paths.size).toBe(4)
+  })
+
+  it.each([null, { name: 'document', format: 1 }])(
+    'P05/P06/V05/V06 keeps the remote grant on its own host and refreshes it after revoke for %j',
+    async (type) => {
+      const base = answer
+      let imageOrigins = [IMAGE_ORIGIN]
+      answer = (call) => {
+        const result = base(call)
+        if (call.method !== 'artifacts.read') return result
+        return {
+          ...(result as object),
+          type,
+          imageOrigins: call.hostId === HOST_B ? imageOrigins : [],
+        }
+      }
+      await expect(remote.content(HOST_B, ID, 1)).resolves.toMatchObject({
+        imageOrigins: [IMAGE_ORIGIN],
+      })
+      const isolated = await remote.content(HOST_A, ID, 1)
+      if (isolated.kind !== 'found') throw new Error('Fixture version not found')
+      expect(isolated.imageOrigins ?? []).toEqual([])
+      await remote.fetch(HOST_B, ID, 1, ['img/a.png'])
+      imageOrigins = []
+      remote.changed()
+      const revoked = await remote.content(HOST_B, ID, 1)
+      expect(revoked).toMatchObject({ imageOrigins: [] })
+      if (revoked.kind !== 'found') throw new Error('Fixture version not found')
+      expect(readFileSync(revoked.files[1]!.file, 'utf8')).toBe('b:img/a.png:v1')
+    },
+  )
+
+  it.each([1, 2])(
+    'P09 applies the latest strict policy before version %i can load',
+    async (version) => {
+      const base = answer
+      answer = (call) => {
+        const result = base(call)
+        return call.method === 'artifacts.read'
+          ? { ...(result as object), strict: true, imageOrigins: [IMAGE_ORIGIN] }
+          : result
+      }
+      const found = await remote.content(HOST_B, ID, version)
+      expect(found).toMatchObject({ strict: true, imageOrigins: [] })
+      await remote.fetch(HOST_B, ID, version, ['img/a.png'])
+      if (found.kind !== 'found') throw new Error('Fixture version not found')
+      expect(readFileSync(found.files[1]!.file, 'utf8')).toBe(`b:img/a.png:v${version}`)
+    },
+  )
+
+  it.each([
+    ['old host', {}],
+    ['unknown strict status', { imageOrigins: [IMAGE_ORIGIN] }],
+    ['untrusted permission metadata', { strict: false, imageOrigins: ['https://*.example.org'] }],
+  ])('P10/P11 loads version files without external grants for %s', async (_, metadata) => {
+    const base = answer
+    answer = (call) =>
+      call.method === 'artifacts.read'
+        ? {
+            title: 'Legacy page',
+            version: 1,
+            html: '',
+            files: [{ path: 'img/a.png', size: 1 }],
+            ...metadata,
+          }
+        : base(call)
+    const found = await remote.content(HOST_B, ID, 1)
+    expect(found.kind).toBe('found')
+    await remote.fetch(HOST_B, ID, 1, null)
+    if (found.kind !== 'found') throw new Error('Fixture version not found')
+    expect(found.imageOrigins ?? []).toEqual([])
+    expect(readFileSync(found.files[0]!.file, 'utf8')).toBe('b:img/a.png:v1')
+  })
+
+  it('P10 does not substitute a cached image from another host or version when the required one fails', async () => {
+    await remote.fetch(HOST_B, ID, 1, ['img/a.png'])
+    await remote.fetch(HOST_A, ID, 2, ['img/a.png'])
+    const base = answer
+    answer = (call) => {
+      if (call.method === 'artifacts.file') throw { code: 'not_found', message: 'gone' }
+      return base(call)
+    }
+    const wanted = await remote.content(HOST_B, ID, 2)
+    if (wanted.kind !== 'found') throw new Error('Fixture version not found')
+    await expect(remote.fetch(HOST_B, ID, 2, ['img/a.png'])).rejects.toMatchObject({
+      code: 'not_found',
+    })
+    expect(existsSync(wanted.files[1]!.file)).toBe(false)
+    answer = () => {
+      throw { code: 'host_offline', message: 'offline' }
+    }
+    remote.ended(HOST_B)
+    await expect(remote.content(HOST_B, ID, 2)).resolves.toEqual({ kind: 'failed' })
+  })
+
   it('have an origin of their own, apart from the same id here and on a third host', () => {
     const origins = new Set([
       originId(ID),

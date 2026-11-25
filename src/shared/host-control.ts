@@ -244,6 +244,7 @@ export type ArtifactContentResult =
       key: string
       /** The latest version declares what reads beyond the page, so its pages get no CDN. */
       strict: boolean
+      imageOrigins?: readonly string[]
       files: ArtifactContentFile[]
       /** Made from a type: its viewer is served in place of the entry page. */
       type?: ArtifactTypeInfo | null

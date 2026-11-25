@@ -189,6 +189,14 @@ export class ArtifactStore {
     return (this.deps.now ?? Date.now)()
   }
 
+  // Until permission storage is wired, reads deny and mutations fail.
+  readonly imageOrigins: (project: string) => Promise<string[]> = async () => []
+
+  readonly setImageOrigin: (project: string, url: string, allowed: boolean) => Promise<void> =
+    async () => {
+      throw new HostError('internal', 'Project image permissions are unavailable')
+    }
+
   private async call<K extends ArtifactCallName>(
     name: K,
     params: ArtifactCalls[K]['params'],

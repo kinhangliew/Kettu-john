@@ -17,6 +17,7 @@ import { readBody, type RuntimeRelay } from './runtime'
 const HOST = '0123456789abcdef0123456789'
 const ORIGIN = `kettu-artifact://${HOST}`
 const ID = 'art_01J9Z3K4V5W6X7Y8Z9A0B1C2D3'
+const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
 
 let dir: string
 let asked: (number | null)[]
@@ -191,6 +192,32 @@ describe('the page runtime on an artifact origin', () => {
 })
 
 describe("an artifact's policy", () => {
+  it.each([null, { name: 'document' as const, format: 1 }])(
+    'V01/V02 uses the owning project image grants in the desktop entry for %j',
+    async (type) => {
+      const content = source.content
+      let imageOrigins: string[] = []
+      source.content = async (id, version) => {
+        const result = await content(id, version)
+        return result.kind === 'found' ? { ...result, type, imageOrigins } : result
+      }
+      const open = async () => {
+        const response = await get(`${ORIGIN}/_kettu/v/2/index.html`)
+        expect(response.status).toBe(200)
+        const image = await get(`${ORIGIN}/_kettu/v/2/img/my%20photo.png`)
+        expect(await image.arrayBuffer()).toEqual(Uint8Array.of(0x89, 0x50).buffer)
+        return response.headers.get('Content-Security-Policy')!.split('; ')
+      }
+      expect((await open()).join(' ')).not.toContain(IMAGE_ORIGIN)
+      imageOrigins = [IMAGE_ORIGIN]
+      expect((await open()).filter((directive) => directive.includes(IMAGE_ORIGIN))).toEqual([
+        expect.stringMatching(/^img-src /),
+      ])
+      imageOrigins = []
+      expect((await open()).join(' ')).not.toContain(IMAGE_ORIGIN)
+    },
+  )
+
   it('keeps the CDNs out of the pages of an artifact that declares reading beyond it', async () => {
     const declared: [string, boolean][] = []
     source.declared = (id, value) => declared.push([id, value])

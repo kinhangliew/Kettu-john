@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +7,9 @@ import { HandshakeLimits } from './limits'
 import { WebServer } from './web'
 
 const TOKEN = 'A'.repeat(43)
+const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
+const OTHER_ORIGIN = 'https://other.example'
+const LOCAL_IMAGE = 'images/local.png'
 
 let dir: string
 let listener: Server
@@ -14,16 +17,24 @@ let web: WebServer
 let base: string
 let asked: { version: number | null; path: string }[]
 let strict: boolean
+let typed: boolean
+let imageOrigins: string[]
+let active: boolean
 
 beforeEach(async () => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'kettu-web-frames-'))
   const files: Record<string, string> = {
     'index.html': '<!doctype html><html><head></head><body><p>hi</p></body></html>',
     'style.css': 'p{}',
+    [LOCAL_IMAGE]: 'local image bytes',
   }
+  mkdirSync(path.join(dir, 'images'))
   for (const [name, text] of Object.entries(files)) writeFileSync(path.join(dir, name), text)
   asked = []
   strict = false
+  typed = false
+  active = true
+  imageOrigins = []
   web = new WebServer({
     root: null,
     server: {
@@ -31,17 +42,24 @@ beforeEach(async () => {
       refusedOne: () => {},
       frameFile: async (token, version, wanted) => {
         asked.push({ version, path: wanted })
-        const text = token === TOKEN ? files[wanted] : undefined
+        const text = active && token === TOKEN ? files[wanted] : undefined
         return text === undefined
           ? null
-          : { file: path.join(dir, wanted), size: text.length, strict }
+          : { file: path.join(dir, wanted), size: text.length, strict, imageOrigins }
       },
+      frameType: async (token, version) =>
+        active && token === TOKEN && typed
+          ? { type: { name: 'document', format: 1 }, version: version ?? 2, strict, imageOrigins }
+          : null,
     },
     limits: new HandshakeLimits(),
     log: () => {},
   })
   listener = createServer((socket) => web.take(socket))
-  await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject)
+    listener.listen(0, '127.0.0.1', resolve)
+  })
   const address = listener.address()
   base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
 })
@@ -53,6 +71,56 @@ afterEach(async () => {
 })
 
 describe("the direct port's artifact frames", () => {
+  it.each(['HTML', 'document'])(
+    'V03/V04/V07/V08 scopes the %s frame to its token and current image permission',
+    async (format) => {
+      typed = format === 'document'
+      const folder = `${base}/frame/${TOKEN}/_kettu/v/1`
+      const readPolicy = async () => {
+        const page = await fetch(`${folder}/index.html`)
+        expect(page.status).toBe(200)
+        expect(page.headers.get('cache-control')).toBe('no-store')
+        const local = await fetch(`${folder}/${LOCAL_IMAGE}`)
+        expect(local.status).toBe(200)
+        expect(local.headers.get('content-type')).toBe('image/png')
+        expect(await local.text()).toBe('local image bytes')
+        const csp = page.headers.get('content-security-policy')!
+        expect(csp).not.toContain(OTHER_ORIGIN)
+        return csp.split('; ').filter((directive) => directive.includes(IMAGE_ORIGIN))
+      }
+      expect(await readPolicy()).toEqual([])
+      imageOrigins = [IMAGE_ORIGIN]
+      expect(await readPolicy()).toEqual([expect.stringMatching(/^img-src /)])
+      imageOrigins = []
+      expect(await readPolicy()).toEqual([])
+      expect(
+        await fetch(`${base}/frame/${'Z'.repeat(43)}/_kettu/v/1/${LOCAL_IMAGE}`).then(
+          (r) => r.status,
+        ),
+      ).toBe(404)
+      active = false
+      expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.status)).toBe(404)
+    },
+  )
+
+  it.each(['HTML', 'document'])(
+    'P09 keeps every %s frame strict from its first load',
+    async (format) => {
+      typed = format === 'document'
+      strict = true
+      imageOrigins = [IMAGE_ORIGIN]
+      for (const version of [1, 2]) {
+        const folder = `${base}/frame/${TOKEN}/_kettu/v/${version}`
+        const page = await fetch(`${folder}/index.html`)
+        expect(page.status).toBe(200)
+        expect(page.headers.get('content-security-policy')).not.toMatch(/https:/)
+        expect(await fetch(`${folder}/${LOCAL_IMAGE}`).then((r) => r.text())).toBe(
+          'local image bytes',
+        )
+      }
+    },
+  )
+
   it("serves a frame's files with their types, sandboxed to the frame's own folder", async () => {
     const page = await fetch(`${base}/frame/${TOKEN}/_kettu/v/2/index.html?page=0.1`)
     expect(page.status).toBe(200)

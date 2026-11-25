@@ -9,6 +9,9 @@ import {
 } from './policy'
 
 const HOST = '0123456789abcdef0123456789'
+const IMAGE_ORIGIN = 'https://test-enabler.oss-cn-hongkong.aliyuncs.com'
+const IMAGE = `${IMAGE_ORIGIN}/t.png`
+const granted = { resourceType: 'image', origins: [IMAGE_ORIGIN] }
 
 describe('mayRequest', () => {
   it.each([
@@ -49,6 +52,63 @@ describe('mayRequest for a strict artifact', () => {
     expect(mayRequest(HOST, `blob:kettu-artifact://${HOST}/0b1c`, true)).toBe(true)
     for (const origin of ARTIFACT_CDNS) expect(mayRequest(HOST, `${origin}/x.js`, true)).toBe(false)
     expect(mayRequest(HOST, 'kettu-artifact://ffffffffffffffffffffffffff/', true)).toBe(false)
+  })
+})
+
+describe('project image request policy', () => {
+  it('W03 never allows a disk image as an artifact request', () => {
+    for (const url of ['file:///tmp/photo.png', '/Users/example/photo.png', 'C:/photos/p.png']) {
+      expect(mayRequest(HOST, url, false, granted)).toBe(false)
+    }
+    expect(
+      mayRequest(HOST, `kettu-artifact://${HOST}/_kettu/v/1/images/local.png`, false, granted),
+    ).toBe(true)
+  })
+
+  it('P01/P06 uses the current grant when the same page makes a new image request', () => {
+    const origins: string[] = []
+    const request = () => mayRequest(HOST, IMAGE, false, { resourceType: 'image', origins })
+    expect(request()).toBe(false)
+    origins.push(IMAGE_ORIGIN)
+    expect(request()).toBe(true)
+    origins.pop()
+    expect(request()).toBe(false)
+  })
+
+  it.each([
+    'https://oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://sibling.oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://child.test-enabler.oss-cn-hongkong.aliyuncs.com/t.png',
+    'https://test-enabler.oss-cn-hongkong.aliyuncs.com.example.org/t.png',
+    `${IMAGE_ORIGIN}:8443/t.png`,
+  ])('P03 does not extend the grant to %s', (url) => {
+    expect(mayRequest(HOST, IMAGE, false, granted)).toBe(true)
+    expect(mayRequest(HOST, url, false, granted)).toBe(false)
+  })
+
+  it('P07 checks the redirect destination against the same exact grant', () => {
+    expect(mayRequest(HOST, IMAGE, false, granted)).toBe(true)
+    expect(mayRequest(HOST, 'https://other.example/redirected.png', false, granted)).toBe(false)
+  })
+
+  it.each(['script', 'stylesheet', 'font', 'media', 'subFrame', 'xhr'])(
+    'P08 permits images of the granted origin while still blocking %s',
+    (resourceType) => {
+      expect(mayRequest(HOST, IMAGE, false, { ...granted, resourceType })).toBe(false)
+      expect(mayRequest(HOST, IMAGE, false, granted)).toBe(true)
+      expect(
+        mayRequest(HOST, 'https://cdn.jsdelivr.net/npm/chart.js', false, {
+          ...granted,
+          resourceType: 'script',
+        }),
+      ).toBe(true)
+    },
+  )
+
+  it('P09 suppresses external images and CDNs for a strict artifact even after granting the origin', () => {
+    expect(mayRequest(HOST, IMAGE, true, granted)).toBe(false)
+    expect(mayRequest(HOST, 'https://cdn.jsdelivr.net/t.png', true, granted)).toBe(false)
+    expect(mayRequest(HOST, IMAGE, false, granted)).toBe(true)
   })
 })
 
